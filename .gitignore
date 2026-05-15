@@ -1,0 +1,40 @@
+# --- Secret / Local Config ---
+.env
+.lgd-nfy*
+
+# --- Python ---
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environment (Very important to ignore the .venv folder)
+.venv/
+venv/
+ENV/
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# --- Hardware & System ---
+# Ignore system-specific logs or serial port locks
+*.log
+*.lock
+
+# macOS specific (if you ever edit files on your Mac via SMB/SFTP)
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Linux specific
+.fuse_hidden
+.directory
+.Trash-*
+
+# --- IDEs ---
+# If you use VS Code / Cursor via Remote SSH
+.vscode/
+.history/
+*.code-workspace
