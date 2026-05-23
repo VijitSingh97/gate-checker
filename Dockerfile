@@ -1,3 +1,8 @@
+# For supply-chain hardening, pin the base image to an immutable digest
+# instead of the floating `22.04` tag. Find the current digest with:
+#     docker buildx imagetools inspect ubuntu:22.04 | grep -i 'Digest:'
+# and replace the line below with, e.g.:
+#     FROM ubuntu@sha256:<the-64-char-digest>
 FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
