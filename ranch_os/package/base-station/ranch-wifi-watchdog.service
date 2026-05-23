@@ -1,0 +1,15 @@
+[Unit]
+Description=Base Station Wi-Fi connectivity watchdog
+After=NetworkManager.service base-station.service
+Requires=NetworkManager.service
+# No [Install] — this unit is started declaratively by base-station.service
+# via Wants=, not enabled at boot directly. That way it's only running
+# when the main service is supposed to be running.
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/ranch-wifi-watchdog
+# If the watchdog itself crashes (network probe error, etc.), come back up
+# after 30s so a transient OS hiccup doesn't permanently disable recovery.
+Restart=on-failure
+RestartSec=30

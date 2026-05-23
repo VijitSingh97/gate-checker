@@ -1,0 +1,31 @@
+[Unit]
+Description=LoRa Base Station
+# Only order against network-online.target. Clock sync is handled
+# in-process by _wait_for_clock_sync() in base_station.py, which runs
+# after the LoRa port is open: it checks for a plausible wall-clock
+# time, kicks systemd-timesyncd for a short window, then falls back to
+# a manual UDP/123 query + `date -s`. We deliberately do NOT order
+# against systemd-time-wait-sync.target — it can stall well past
+# TimeoutStopSec on a freshly-joined Wi-Fi.
+After=network-online.target
+# ranch-wifi-watchdog comes up alongside us and forces the captive portal
+# back if Wi-Fi has been down too long. Wants= (not Requires=) so its own
+# crash doesn't drag us down.
+Wants=network-online.target ranch-wifi-watchdog.service
+# Only run once the captive portal has produced a config file.
+ConditionPathExists=/var/lib/base_station/base_config.env
+
+[Service]
+Type=simple
+Restart=on-failure
+RestartSec=10
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+EnvironmentFile=-/var/lib/base_station/base_config.env
+WorkingDirectory=/var/lib/base_station
+ExecStartPre=/bin/mkdir -p /var/lib/base_station
+ExecStart=/usr/bin/python3 /usr/bin/base_station.py
+
+[Install]
+WantedBy=multi-user.target

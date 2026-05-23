@@ -1,0 +1,2 @@
+source "$BR2_EXTERNAL_RANCH_OS_PATH/package/gate-client/Config.in"
+source "$BR2_EXTERNAL_RANCH_OS_PATH/package/base-station/Config.in"

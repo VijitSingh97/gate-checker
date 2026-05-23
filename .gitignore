@@ -1,40 +1,73 @@
-# --- Secret / Local Config ---
-.env
-.lgd-nfy*
+# ==============================================================================
+# Ranch OS Build System
+# ==============================================================================
+releases/
+*.img
+*.iso
+*.tar.gz
 
-# --- Python ---
-# Byte-compiled / optimized / DLL files
+# Buildroot download / compiler caches used by the Docker build.
+dl-cache/
+ccache-dir/
+
+# Buildroot scratch directories (created if Buildroot is run natively).
+buildroot/output/
+output/
+output_base/
+output_gate/
+.config.old
+
+# ==============================================================================
+# Manufacturing secrets
+# ==============================================================================
+# The factory provisioners write Fernet keys and per-device AP / portal
+# passwords here. Never commit this file.
+manufacturing_inventory.csv
+provision_creds.env
+temp_config.env
+# Sticker output captured from a real flash run — contains live portal
+# passwords; never commit. If you save these for your records, keep them
+# in a password manager, not the repo.
+images_notes.txt
+
+# ==============================================================================
+# Python
+# ==============================================================================
 __pycache__/
 *.py[cod]
 *$py.class
-
-# Virtual Environment (Very important to ignore the .venv folder)
+.env
+*.env
 .venv/
 venv/
 ENV/
+# Coverage / pytest artifacts — not produced by today's stdlib-unittest
+# suite, but cheap to guard against if anyone later adds coverage or
+# switches frameworks.
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
-# Distribution / packaging
-dist/
-build/
-*.egg-info/
-
-# --- Hardware & System ---
-# Ignore system-specific logs or serial port locks
-*.log
-*.lock
-
-# macOS specific (if you ever edit files on your Mac via SMB/SFTP)
+# ==============================================================================
+# IDE / OS
+# ==============================================================================
 .DS_Store
-.AppleDouble
-.LSOverride
-
-# Linux specific
-.fuse_hidden
-.directory
-.Trash-*
-
-# --- IDEs ---
-# If you use VS Code / Cursor via Remote SSH
+Thumbs.db
 .vscode/
-.history/
-*.code-workspace
+.cursor/
+.idea/
+.claude/
+*.log
+# Local-only developer log (used by Claude Code / other AI tools to
+# keep session-by-session context). Not part of the public repo.
+CLAUDE.md
+# Editor swap / backup files. Vim's *.swp lives next to the file being
+# edited; Emacs leaves *~ all over. Neither should ever land in git.
+*.swp
+*.swo
+*~
+*.bak

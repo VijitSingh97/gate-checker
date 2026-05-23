@@ -1,0 +1,21 @@
+[Unit]
+Description=Base Station SoftAP Provisioner
+After=NetworkManager.service
+Requires=NetworkManager.service
+# Only run on first boot, when no operator config has been written yet.
+ConditionPathExists=!/var/lib/base_station/base_config.env
+
+[Service]
+Type=simple
+ExecStartPre=/bin/mkdir -p /var/lib/base_station
+ExecStart=/usr/bin/python3 /usr/bin/provision.py
+# On clean exit, the operator has finished setup — hand off to the main service.
+# --no-block: submit the start job and return immediately. Without it,
+# systemctl waits for base-station to enter active state, which can be
+# slow at first boot (network-online.target etc.). If that wait exceeds
+# TimeoutStopSec (default 90s), our process gets SIGTERMed and the start
+# job gets cancelled — base-station then never starts at all.
+ExecStopPost=/bin/systemctl --no-block start base-station.service
+
+[Install]
+WantedBy=multi-user.target

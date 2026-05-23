@@ -1,0 +1,37 @@
+#!/bin/sh
+# Pre-commit hook for the gate-checker project.
+#
+# Enforces, in order:
+#   1. Factory tooling (flash_base_station.py, provision_gate.py) must
+#      depend only on the Python standard library so operators can run
+#      them on a fresh laptop with no `pip install` step.
+#   2. The unit test suite under tests/ must pass. If the dev hasn't
+#      installed the `cryptography` package yet, the runner reports a
+#      skip and exits 0 — first-time contributors aren't blocked from
+#      committing while they set up their venv.
+#
+# Activate with:
+#   git config core.hooksPath .githooks
+#
+# Each contributor opts in once per clone — git deliberately doesn't run
+# hooks from a repo path by default (it'd be a code-execution vector on
+# fresh clones), so this line is the seam where they grant consent.
+
+set -e
+
+REPO_ROOT=$(git rev-parse --show-toplevel)
+
+if ! python3 "$REPO_ROOT/scripts/check_factory_deps.py"; then
+    echo
+    echo "pre-commit failed: factory scripts have non-stdlib imports."
+    echo "See docs/BUILDING.md > 'Factory scripts are stdlib-only'."
+    exit 1
+fi
+
+if ! "$REPO_ROOT/scripts/run_tests.sh"; then
+    echo
+    echo "pre-commit failed: unit tests failed."
+    echo "Re-run locally with:  scripts/run_tests.sh -v"
+    echo "Suite layout + scope: tests/README.md"
+    exit 1
+fi

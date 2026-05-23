@@ -1,0 +1,69 @@
+# --- Core Toolchain ---
+BR2_TOOLCHAIN_BUILDROOT=y
+BR2_TOOLCHAIN_BUILDROOT_GLIBC=y
+BR2_PACKAGE_HOST_RUSTC=y
+
+# Enable systemd
+BR2_INIT_SYSTEMD=y
+BR2_SYSTEM_BIN_SH_BASH=y
+
+# Enable Python 3 and required packages
+BR2_PACKAGE_PYTHON3=y
+BR2_PACKAGE_PYTHON_SERIAL=y
+BR2_PACKAGE_PYTHON_CRYPTOGRAPHY=y
+# gate_client.py drives GPIO via gpiozero with rpi-gpio as the pin factory.
+# Both are required at runtime — without them the service crashes on the
+# first Button/OutputDevice construction with ModuleNotFoundError.
+BR2_PACKAGE_PYTHON_GPIOZERO=y
+BR2_PACKAGE_PYTHON_RPI_GPIO=y
+
+# Install your custom package
+BR2_PACKAGE_GATE_CLIENT=y
+
+# --- Filesystem Size ---
+# Measured rootfs usage is ~90 MB. 128 MB gives ~40% headroom; the gate has
+# a tiny package set so we don't expect much growth here.
+BR2_TARGET_ROOTFS_EXT2_SIZE="128M"
+
+# Rootfs overlay — adds /etc/fstab that mounts the FAT boot partition at
+# /boot at runtime, and masks serial-getty@ttyAMA0 so the LoRa radio can
+# own the UART. Without /etc/fstab the factory-flash gate_config.env is
+# invisible to userspace; without the getty mask, systemd would race
+# gate_client.py for /dev/serial0.
+BR2_ROOTFS_OVERLAY="$(BR2_EXTERNAL_RANCH_OS_PATH)/rootfs-overlay"
+
+# Replace the rpi-firmware default config.txt with our copy, which sets
+# enable_uart=1 and dtoverlay=disable-bt so /dev/serial0 exists on the
+# GPIO header for the LoRa radio.
+BR2_PACKAGE_RPI_FIRMWARE_CONFIG_FILE="$(BR2_EXTERNAL_RANCH_OS_PATH)/boot/config-gate.txt"
+
+# Enable Compiler Caching
+BR2_CCACHE=y
+
+# --- Size reduction ---
+# Glibc ships locale data for every language by default (~30 MB). Strip
+# everything except C / en_US — the device has no UI to display anything else.
+BR2_ENABLE_LOCALE_PURGE=y
+BR2_ENABLE_LOCALE_WHITELIST="C en_US"
+
+# Ship Python bytecode (.pyc) only, not the source (.py). Smaller image
+# and the source isn't sitting on the SD card for casual extraction.
+BR2_PACKAGE_PYTHON3_PYC_ONLY=y
+BR2_PACKAGE_PYTHON3_REMOVE_TESTS=y
+
+# Disable systemd subsystems the project doesn't use. The gate has no IP
+# networking at all — it only talks LoRa over a serial port — so the
+# networking and resolver subsystems can go too.
+BR2_PACKAGE_SYSTEMD_HIBERNATE=n
+BR2_PACKAGE_SYSTEMD_HOMED=n
+BR2_PACKAGE_SYSTEMD_IMPORTD=n
+BR2_PACKAGE_SYSTEMD_MACHINED=n
+BR2_PACKAGE_SYSTEMD_NETWORKD=n
+BR2_PACKAGE_SYSTEMD_OOMD=n
+BR2_PACKAGE_SYSTEMD_PORTABLED=n
+BR2_PACKAGE_SYSTEMD_REPART=n
+BR2_PACKAGE_SYSTEMD_RESOLVED=n
+BR2_PACKAGE_SYSTEMD_RFKILL=n
+BR2_PACKAGE_SYSTEMD_SYSEXT=n
+BR2_PACKAGE_SYSTEMD_USERDB=n
+BR2_PACKAGE_SYSTEMD_VCONSOLE=n
