@@ -30,13 +30,16 @@ jobs:
       matrix:
         python-version: ['3.11', '3.12']
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
-          cache: pip
+          # No `cache: pip` here — actions/setup-python needs a
+          # requirements.txt or pyproject.toml to compute a cache key,
+          # and we ship neither. The single `pip install cryptography`
+          # below is fast enough that caching wouldn't materially help.
 
       - name: Install runtime test dependency
         # Only the `cryptography` package is needed — `requests` and

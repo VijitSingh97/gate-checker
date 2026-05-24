@@ -127,6 +127,32 @@ check_absent() {
     fi
 }
 
+# Like check_absent, but tolerates a busybox-applet symlink. Some
+# "dev tools" (notably `less`) are also busybox applets that the
+# default Buildroot install creates as `/usr/bin/X -> /bin/busybox`.
+# That symlink is harmless and ships in every image regardless of
+# profile; only the standalone-binary form from dev.fragment is a
+# real leak. Test: symlink (or absent) = pass, regular file = fail.
+check_not_real_file() {
+    local path="$1"
+    local desc="${2:-$path not a standalone binary}"
+    # Test for the symlink case FIRST. `-L` is true for symlinks even
+    # if the link target doesn't exist on the host running this script
+    # (the mounted image may point at /bin/busybox, which exists on the
+    # target but may not on the host) — so checking `-e` first would
+    # mis-classify a dangling symlink as "absent".
+    if [[ -L "$MOUNT_POINT$path" ]]; then
+        echo "  [OK]   $desc (busybox applet)"
+        pass=$((pass + 1))
+    elif [[ ! -e "$MOUNT_POINT$path" ]]; then
+        echo "  [OK]   $desc (absent)"
+        pass=$((pass + 1))
+    else
+        echo "  [FAIL] $desc  (unexpected: standalone binary at $path)"
+        fail=$((fail + 1))
+    fi
+}
+
 check_no_grep() {
     # Asserts a pattern is ABSENT from a file — for guarding against
     # imports of packages we don't actually ship (the dotenv class of bug),
@@ -611,10 +637,15 @@ if [[ "$IS_DEV" -eq 0 ]]; then
         "root account is not unlocked (no real password hash)"
 
     # Debug tools shipped only by dev.fragment. Any one of these in a
-    # production image means dev.fragment got merged for this build.
-    check_absent /usr/bin/less    "less absent"
-    check_absent /usr/bin/strace  "strace absent"
-    check_absent /usr/bin/tcpdump "tcpdump absent"
+    # production image (as a real binary) means dev.fragment got merged
+    # for this build. `less` gets the relaxed check because busybox also
+    # has a `less` applet that installs as a symlink to /bin/busybox —
+    # that's harmless and ships in every Buildroot image regardless of
+    # profile. strace and tcpdump are NOT busybox applets, so the strict
+    # check_absent is correct for them.
+    check_not_real_file /usr/bin/less    "less not a standalone binary"
+    check_absent        /usr/bin/strace  "strace absent"
+    check_absent        /usr/bin/tcpdump "tcpdump absent"
 
     # Gate-specific dev-gate.fragment artifacts. Production gates must
     # honor the LoRa-only invariant from gate.fragment: no networkd,
