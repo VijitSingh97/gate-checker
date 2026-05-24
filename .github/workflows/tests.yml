@@ -22,20 +22,19 @@ concurrency:
 jobs:
   unit:
     runs-on: ubuntu-latest
-    # Matrix across the Python versions Buildroot is known to ship in
-    # the bcmrpi defconfigs (3.11 today, 3.12 / 3.13 in newer trees).
-    # The test suite uses `X | None` type unions which need >= 3.10.
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ['3.11', '3.12']
     steps:
       - uses: actions/checkout@v5
 
-      - name: Set up Python ${{ matrix.python-version }}
+      - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: ${{ matrix.python-version }}
+          # Pin to the Python version Buildroot actually ships in the
+          # bcmrpi defconfig used by this project's images. When
+          # Buildroot bumps (verify_image.sh's python-path checks
+          # surface it), bump this pin in the same commit. We don't
+          # matrix-test across multiple versions because the
+          # application is tied to whatever Python its image carries.
+          python-version: '3.11'
           # No `cache: pip` here — actions/setup-python needs a
           # requirements.txt or pyproject.toml to compute a cache key,
           # and we ship neither. The single `pip install cryptography`
