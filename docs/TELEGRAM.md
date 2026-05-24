@@ -110,11 +110,14 @@ These arrive unprompted, in response to physical events at the gates.
 
 ### The online ping
 
-> 📡 Gate Monitor Base Station is Online.
+> 📡 Gate Monitor Base Station BASE-9A22 is Online.
 
 Sent once on every boot of the base-station service, after the
 device has confirmed its system clock is plausible (NTP) and the
 Telegram TLS handshake works. This is the device's "I'm up" beacon.
+The device ID (`BASE-XXXX`) makes it unambiguous which base just
+came online if you've got more than one base reporting to the same
+chat.
 
 You'll see it:
 - After the first captive-portal setup (means setup succeeded).
@@ -124,17 +127,21 @@ You'll see it:
 
 ### Gate state alerts
 
-> Gate Front Pasture (GATE-A1B2C3): OPEN
+> 🔓 Front Pasture (GATE-A1B2C3): OPEN
+> 🔒 Front Pasture (GATE-A1B2C3): CLOSED
 
-Sent whenever a paired gate transitions from CLOSED to OPEN. If the
-gate has a display name (set via `/pair` or `/rename`), the message
-shows it with the gate ID in parentheses; otherwise just the ID.
+Sent whenever a paired gate's state changes — both opens and closes.
+The leading emoji (🔓 / 🔒) makes the state visible at a glance in
+the notification tray. If the gate has a display name (set via
+`/pair` or `/rename`), the message shows it with the gate ID in
+parentheses; otherwise just the ID.
 
-Gate **closes** are persisted to the SQLite event log but **not**
-sent as Telegram alerts by default — the design assumption is "the
-operator wants to know when the gate opens; closing is the normal
-state." You can still see closes via `/status` and through the event
-log on the device itself.
+**Dedup rules:** the base only fires a Telegram message on a real
+state transition. A `/status GATE-X` reply that comes back showing
+the gate in the same state it was already known to be in does
+**not** also fire an unsolicited notification — that would
+double-spam every status check. The de-dup compares against the
+most recently logged event in the SQLite gate-events table.
 
 ### What the bot will not send
 
@@ -188,19 +195,31 @@ back to you on demand.
 
 **Reply (no gates):**
 ```
+📋 Base: BASE-9A22  •  Wi-Fi: HomeNetwork
+
 No gates registered. Pair one with /pair GATE-XXXX <key> [name].
 ```
 
 **Reply (with gates):**
 ```
+📋 Base: BASE-9A22  •  Wi-Fi: HomeNetwork
+
 2 gate(s) registered:
   • Front Pasture (GATE-A1B2C3)  last_seq=147  paired 2026-04-12 09:14:33
   • GATE-B7Z3K4  last_seq=22  paired 2026-05-01 17:02:11
 ```
 
-The list is sorted by pairing time, oldest first. `last_seq` is the
-highest sequence number the base has accepted from that gate; it's
-useful for confirming the gate is actually reaching the base. A
+The header line carries the base's device ID and the currently-
+connected Wi-Fi SSID, so if you've got multiple base stations
+reporting into one chat you can tell which one replied, and you can
+spot the "base is on the wrong / a backup network" failure mode
+without having to SSH in. SSID is `(unknown)` if NetworkManager
+can't report an active wireless connection (e.g. the operator
+landed on the captive portal AP somehow, or NM is wedged).
+
+The list of gates is sorted by pairing time, oldest first. `last_seq`
+is the highest sequence number the base has accepted from that gate;
+it's useful for confirming the gate is actually reaching the base. A
 constant `last_seq` over hours of expected traffic suggests the gate
 is offline or out of range.
 
@@ -217,17 +236,17 @@ is offline or out of range.
 
 **Reply (success):**
 ```
-Front Pasture (GATE-A1B2C3): CLOSED (live).
+🔒 Front Pasture (GATE-A1B2C3): CLOSED (live).
 ```
 
 **Reply (gate offline / out of range):**
 ```
-✗ Front Pasture (GATE-A1B2C3) did not answer the challenge. Is the gate powered on and in LoRa range?
+❌ Front Pasture (GATE-A1B2C3) did not answer the challenge. Is the gate powered on and in LoRa range?
 ```
 
 **Reply (base-side radio failure):**
 ```
-✗ Could not transmit to GATE-A1B2C3 — the LoRa serial write failed. Check the device log; this is a base-side problem, not the gate.
+❌ Could not transmit to GATE-A1B2C3 — the LoRa serial write failed. Check the device log; this is a base-side problem, not the gate.
 ```
 
 This sends a real `status_req` packet over LoRa and waits up to 5
@@ -256,7 +275,7 @@ just the gate ID.
 
 **Reply (success, new gate):**
 ```
-✓ Paired Front Pasture (GATE-A1B2C3).
+✅ Paired Front Pasture (GATE-A1B2C3).
 ```
 
 The bot also immediately deletes your `/pair` message from the chat,
@@ -335,7 +354,7 @@ This will remove Front Pasture (GATE-A1B2C3) (last seen 2026-05-22 14:18:55, las
 
 After `/confirm <token>`:
 ```
-✓ Removed Front Pasture (GATE-A1B2C3). Event history kept; re-pair anytime with /pair.
+✅ Removed Front Pasture (GATE-A1B2C3). Event history kept; re-pair anytime with /pair.
 ```
 
 **Reply (unknown gate):**
@@ -369,7 +388,7 @@ GATE-NOPEXX is not registered.
 
 **Reply:**
 ```
-✓ Renamed GATE-A1B2C3 → North Driveway.
+✅ Renamed GATE-A1B2C3 → North Driveway.
 ```
 
 **Reply (unknown gate):**
@@ -394,22 +413,22 @@ your mind. Alerts from that gate will use the new name immediately.
 
 **Reply (success):**
 ```
-✓ Opened Front Pasture (GATE-A1B2C3).
+🔓 Opened Front Pasture (GATE-A1B2C3).
 ```
 
 **Reply (gate was already open):**
 ```
-Front Pasture (GATE-A1B2C3) was already open; no relay pulse fired.
+ℹ️ Front Pasture (GATE-A1B2C3) was already open; no relay pulse fired.
 ```
 
 **Reply (gate didn't answer):**
 ```
-✗ Front Pasture (GATE-A1B2C3) did not answer the challenge. Is the gate powered on and in LoRa range?
+❌ Front Pasture (GATE-A1B2C3) did not answer the challenge. Is the gate powered on and in LoRa range?
 ```
 
 **Reply (gate answered, but state didn't confirm):**
 ```
-✗ Front Pasture (GATE-A1B2C3) accepted the challenge but did not confirm. The action may still have fired — send `/status GATE-A1B2C3` to check.
+⚠️ Front Pasture (GATE-A1B2C3) accepted the challenge but did not confirm. The action may still have fired — send `/status GATE-A1B2C3` to check.
 ```
 
 #### What happens under the hood
@@ -432,7 +451,12 @@ reported back. `/status GATE-XXXX` is the live truth check.
 **Syntax:** `/close GATE-XXXX`
 
 Identical to `/open` in every way, with `closed` as the target
-state. Same replies, same failure modes, same need for `/status` to
+state. The success reply leads with 🔒 (matching the close-state
+emoji):
+```
+🔒 Closed Front Pasture (GATE-A1B2C3).
+```
+Same failure modes as `/open`, same need for `/status` to
 double-check on timeout.
 
 ---
@@ -461,7 +485,7 @@ The device will then reboot the captive portal AP (BaseStation_Setup) and you'll
 
 After `/confirm <token>`:
 ```
-✓ Resetting now. You will lose this chat until the device joins a new Wi-Fi via the BaseStation_Setup captive portal.
+🔄 Resetting now. You will lose this chat until the device joins a new Wi-Fi via the BaseStation_Setup captive portal.
 ```
 
 The bot delivers that ack first, *then* the device:
@@ -551,7 +575,7 @@ Nothing to confirm — no pending action for you (or it already expired).
 
 **Reply (something pending):**
 ```
-✗ Cancelled /unpair GATE-A1B2C3.
+🛑 Cancelled /unpair GATE-A1B2C3.
 ```
 
 **Reply (nothing pending):**

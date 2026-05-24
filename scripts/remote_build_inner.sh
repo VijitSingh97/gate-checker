@@ -64,12 +64,23 @@ trap cleanup EXIT INT TERM HUP
 echo "   [remote] Running pre-hook..."
 eval "$PRE_HOOK"
 
-if [[ "$(docker images -q ranch-builder 2>/dev/null)" == "" ]]; then
-  echo "   [remote] Building ranch-builder image..."
-  docker build -t ranch-builder .
-else
-  echo "   [remote] Reusing existing ranch-builder image."
-fi
+# Always invoke docker build — layer caching makes this a few-second
+# no-op when nothing changed, and it guarantees the BUILDER_UID/GID
+# in the image match the host user. Without that match, Docker bind
+# mounts (dl-cache, ccache-dir, releases) end up unwritable from
+# inside the container: "Permission denied" on the first cmake fetch.
+echo "   [remote] Ensuring ranch-builder image is up to date..."
+docker build \
+    --build-arg "BUILDER_UID=$(id -u)" \
+    --build-arg "BUILDER_GID=$(id -g)" \
+    -t ranch-builder .
+
+# Ensure host-side bind mount targets exist BEFORE `docker run`.
+# Docker creates missing bind-mount source dirs as root:root, which
+# the container's builder user can't write to. mkdir -p creates them
+# owned by the host user, matching the BUILDER_UID/GID baked into
+# the image above.
+mkdir -p dl-cache ccache-dir releases
 
 echo "   [remote] Running build container (profile=$RANCH_BUILD_PROFILE, targets=$RANCH_BUILD_TARGETS)..."
 DOCKER_START=$SECONDS

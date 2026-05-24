@@ -6,9 +6,9 @@
 # Usage:  scripts/verify_image.sh path/to/image.img
 # Exit:   0 if every check passes, 1 otherwise.
 #
-# Requires losetup + mount, so this script only runs on Linux. Use it on the
-# build host (e.g. singh-box) right after remote_build.sh, or copy the image
-# to any Linux box. Needs sudo to loop-mount; you'll be prompted once.
+# Requires losetup + mount, so this script only runs on Linux. Use it on
+# the build host right after remote_build.sh, or copy the image to any
+# Linux box. Needs sudo to loop-mount; you'll be prompted once.
 
 set -euo pipefail
 
@@ -106,6 +106,23 @@ check_grep() {
         pass=$((pass + 1))
     else
         echo "  [FAIL] $desc  (pattern '$pattern' not in $path)"
+        fail=$((fail + 1))
+    fi
+}
+
+# Inverse of check_file: pass when the path is ABSENT. Used by the
+# production-profile block to assert dev-only artifacts (dropbear,
+# debug tools, gate-side networkd) haven't leaked into a shippable
+# image. Follows symlinks (-e) so a dangling symlink also counts as
+# "not really there".
+check_absent() {
+    local path="$1"
+    local desc="${2:-$path absent}"
+    if [[ ! -e "$MOUNT_POINT$path" ]]; then
+        echo "  [OK]   $desc"
+        pass=$((pass + 1))
+    else
+        echo "  [FAIL] $desc  (unexpected: $path is present)"
         fail=$((fail + 1))
     fi
 }
@@ -228,7 +245,7 @@ if [[ "$FLAVOR" == "base" ]]; then
         "factory-reset wipe routine present"
     check_grep "/usr/bin/base_station.py" "os\\._exit\\(0\\)" \
         "factory reset exits the whole process (os._exit, not sys.exit)"
-    # Allow-list was removed in Session 11 in favour of "the chat IS
+    # The user-ID allow-list was removed in favour of "the chat IS
     # the auth boundary". Make sure no stray reference sneaks back in
     # — its presence here would suggest a half-applied revert that
     # would silently disable command access.
@@ -267,14 +284,14 @@ fi
 {
     BOOT_MP=$(mktemp -d)
     sudo mount -o ro "${LOOP}p1" "$BOOT_MP" 2>/dev/null
-    if sudo grep -qE "^enable_uart=1" "$BOOT_MP/config.txt" 2>/dev/null; then
+    if sudo cat "$BOOT_MP/config.txt" 2>/dev/null | grep -qE "^enable_uart=1"; then
         echo "  [OK]   config.txt enables the UART (enable_uart=1)"
         pass=$((pass + 1))
     else
         echo "  [FAIL] config.txt enables the UART (enable_uart=1)  (missing or wrong)"
         fail=$((fail + 1))
     fi
-    if sudo grep -qE "^dtoverlay=disable-bt" "$BOOT_MP/config.txt" 2>/dev/null; then
+    if sudo cat "$BOOT_MP/config.txt" 2>/dev/null | grep -qE "^dtoverlay=disable-bt"; then
         echo "  [OK]   config.txt frees PL011 from Bluetooth"
         pass=$((pass + 1))
     else
@@ -284,7 +301,7 @@ fi
     # Pi 3 boards have been observed to fail to even boot (black-screen
     # HDMI, no network) when gpu_mem is set below ~32 MB. Guard against
     # accidentally re-introducing that.
-    GPU_MEM=$(sudo grep -E "^gpu_mem=" "$BOOT_MP/config.txt" 2>/dev/null | tail -1 | cut -d= -f2 | tr -d ' ')
+    GPU_MEM=$(sudo cat "$BOOT_MP/config.txt" 2>/dev/null | grep -E "^gpu_mem=" | tail -1 | cut -d= -f2 | tr -d ' ')
     if [ -n "$GPU_MEM" ] && [ "$GPU_MEM" -ge 32 ] 2>/dev/null; then
         echo "  [OK]   config.txt gpu_mem=$GPU_MEM is safe (>=32)"
         pass=$((pass + 1))
@@ -299,7 +316,7 @@ fi
     # We assert the right per-board [piN] section is present.
     case "$FLAVOR" in
     gate)
-        if sudo grep -qE "^kernel=zImage" "$BOOT_MP/config.txt" 2>/dev/null; then
+        if sudo cat "$BOOT_MP/config.txt" 2>/dev/null | grep -qE "^kernel=zImage"; then
             echo "  [OK]   config.txt sets kernel=zImage for Pi Zero W"
             pass=$((pass + 1))
         else
@@ -308,14 +325,14 @@ fi
         fi
         ;;
     base)
-        if sudo grep -qE "^kernel=Image" "$BOOT_MP/config.txt" 2>/dev/null; then
+        if sudo cat "$BOOT_MP/config.txt" 2>/dev/null | grep -qE "^kernel=Image"; then
             echo "  [OK]   config.txt sets kernel=Image for Pi 3 64-bit"
             pass=$((pass + 1))
         else
             echo "  [FAIL] config.txt has no kernel=Image line — Pi 3 64-bit needs it"
             fail=$((fail + 1))
         fi
-        if sudo grep -qE "^arm_64bit=1" "$BOOT_MP/config.txt" 2>/dev/null; then
+        if sudo cat "$BOOT_MP/config.txt" 2>/dev/null | grep -qE "^arm_64bit=1"; then
             echo "  [OK]   config.txt sets arm_64bit=1 for Pi 3 64-bit"
             pass=$((pass + 1))
         else
@@ -494,16 +511,21 @@ else
 
     # gpiozero + a pin-factory backend must be installed; gate_client.py
     # imports Button and OutputDevice from gpiozero, and gpiozero needs
-    # RPi.GPIO (or equivalent) under the hood. Globbing the python
-    # site-packages dir because the Python version segment varies.
+    # RPi.GPIO (or equivalent) under the hood. We check for the package
+    # *directory*, not a specific `__init__.py`, because the gate
+    # fragment sets BR2_PACKAGE_PYTHON3_PYC_ONLY=y — Buildroot strips
+    # the source files and ships only `.pyc`, so `__init__.py` won't
+    # exist even when the package is correctly installed. Globbing the
+    # python site-packages dir because the Python version segment
+    # varies.
     check_any "gpiozero installed" \
-        /usr/lib/python3.11/site-packages/gpiozero/__init__.py \
-        /usr/lib/python3.12/site-packages/gpiozero/__init__.py \
-        /usr/lib/python3.13/site-packages/gpiozero/__init__.py
+        /usr/lib/python3.11/site-packages/gpiozero \
+        /usr/lib/python3.12/site-packages/gpiozero \
+        /usr/lib/python3.13/site-packages/gpiozero
     check_any "RPi.GPIO installed (gpiozero pin factory)" \
-        /usr/lib/python3.11/site-packages/RPi/GPIO/__init__.py \
-        /usr/lib/python3.12/site-packages/RPi/GPIO/__init__.py \
-        /usr/lib/python3.13/site-packages/RPi/GPIO/__init__.py
+        /usr/lib/python3.11/site-packages/RPi/GPIO \
+        /usr/lib/python3.12/site-packages/RPi/GPIO \
+        /usr/lib/python3.13/site-packages/RPi/GPIO
 fi
 
 # ----------------------------------------------------------------------
@@ -522,6 +544,91 @@ if [[ "$IS_DEV" -eq 1 ]]; then
     # / `root:*`) fields would all fail to match.
     check_grep "/etc/shadow" "^root:\\\$[0-9a-zA-Z]" \
         "root has a password hash in /etc/shadow"
+
+    # Dev gate images get a USB-ethernet SSH path so a developer can plug
+    # a USB-to-eth adapter into the Pi Zero W's data micro-USB port and
+    # SSH in over the LAN. Production gate images strip all this back
+    # out — no networkd, no .network file — so the LoRa-only invariant
+    # in gate.fragment holds.
+    if [[ "$FLAVOR" == "gate" ]]; then
+        check_file "/usr/lib/systemd/system/systemd-networkd.service" \
+            "systemd-networkd unit installed (re-enabled by dev-gate.fragment)"
+        # The vendor preset (90-systemd.preset → enable systemd-networkd)
+        # creates this alias symlink on `systemctl preset-all`. Its
+        # presence is a reliable signal the service is enabled at boot.
+        check_file "/etc/systemd/system/dbus-org.freedesktop.network1.service" \
+            "systemd-networkd enabled at boot"
+        check_file "/etc/systemd/network/20-usb-eth.network" \
+            "USB-ethernet DHCP .network unit installed"
+        check_grep "/etc/systemd/network/20-usb-eth.network" \
+            "^DHCP=yes" \
+            "USB-ethernet .network unit requests DHCP"
+
+        # "Black box" diagnostic snapshot: a single self-restarting
+        # service (Type=simple + Restart=always + RestartSec=60) that
+        # writes ip/journal/dmesg to /boot/dev_diag.txt every 60s. The
+        # boot partition is FAT32 so the developer can pull the SD
+        # card, plug it into macOS Finder, and read the file with no
+        # ext4 tools. Critical when the gate doesn't come up on the
+        # LAN and there's no console cable handy.
+        #
+        # Note: a .timer unit would be more "systemd-idiomatic" but
+        # Buildroot's `systemctl preset-all` finalize step wipes
+        # overlay-installed wants-symlinks for units in /usr/lib.
+        # The pattern that survives is: unit in /etc/systemd/system/
+        # + relative wants-symlink, same as ranch-hostname.service.
+        check_file "/usr/bin/ranch-dev-diag" \
+            "dev-diag snapshot script installed"
+        check_file "/etc/systemd/system/ranch-dev-diag.service" \
+            "dev-diag service unit installed in /etc"
+        check_file "/etc/systemd/system/multi-user.target.wants/ranch-dev-diag.service" \
+            "dev-diag service enabled at multi-user.target"
+    fi
+fi
+
+# ----------------------------------------------------------------------
+# Production-profile-only checks: assert NO dev-only artifact leaked in.
+# Catches the regression where a build forgets to clear
+# RANCH_BUILD_PROFILE=development before producing a shippable image,
+# or where dev.fragment / dev-gate.fragment paths get accidentally
+# referenced from a production code path. None of these should EVER
+# appear in an image whose filename doesn't carry the `_dev` suffix.
+# ----------------------------------------------------------------------
+if [[ "$IS_DEV" -eq 0 ]]; then
+    echo
+    echo "-- production profile (no dev leakage) --"
+
+    # SSH server must not be present — production has no remote login
+    # path on purpose. The only way in is physical access to the SD card.
+    check_absent /usr/sbin/dropbear "dropbear absent (no remote login)"
+    check_absent /usr/bin/dropbear  "dropbear absent (no remote login, alt path)"
+
+    # /etc/shadow's root row must NOT carry a real password hash. Real
+    # hashes start with $1$, $5$, $6$, or $y$ — the regex catches all of
+    # those. Acceptable lockout values (empty field, `*`, `!`) do not
+    # match. If this fires, dev.fragment leaked into the build.
+    check_no_grep "/etc/shadow" "^root:\\\$" \
+        "root account is not unlocked (no real password hash)"
+
+    # Debug tools shipped only by dev.fragment. Any one of these in a
+    # production image means dev.fragment got merged for this build.
+    check_absent /usr/bin/less    "less absent"
+    check_absent /usr/bin/strace  "strace absent"
+    check_absent /usr/bin/tcpdump "tcpdump absent"
+
+    # Gate-specific dev-gate.fragment artifacts. Production gates must
+    # honor the LoRa-only invariant from gate.fragment: no networkd,
+    # no IP stack, no USB-eth helpers, no on-device diagnostic script.
+    if [[ "$FLAVOR" == "gate" ]]; then
+        check_absent /usr/lib/systemd/system/systemd-networkd.service \
+            "systemd-networkd not installed (LoRa-only invariant)"
+        check_absent /etc/systemd/network/20-usb-eth.network \
+            "USB-eth .network unit absent"
+        check_absent /usr/bin/ranch-dev-diag \
+            "ranch-dev-diag script absent"
+        check_absent /etc/systemd/system/ranch-dev-diag.service \
+            "ranch-dev-diag service absent"
+    fi
 fi
 
 echo

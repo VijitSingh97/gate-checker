@@ -75,8 +75,8 @@ class AuthorizationTests(_ChannelCase):
 
     def test_no_attribute_for_removed_allow_list(self):
         """Defence in depth: the user-ID allow-list was removed in
-        Session 11. Make sure nothing reintroduces it via a stray
-        attribute."""
+        favour of "the chat IS the auth boundary". Make sure nothing
+        reintroduces it via a stray attribute."""
         self.assertFalse(hasattr(self.channel, "_allowed_user_ids"))
 
 
@@ -317,6 +317,14 @@ class StatusAndHelpTests(_ChannelCase):
         self.channel._process_update(_helpers.make_message("/status"))
         self.assertIn("No gates registered", self.cap.last_reply)
 
+    def test_status_empty_includes_base_id_header(self):
+        """Empty registry should still carry the device-id + SSID header
+        so the operator can confirm which base they're talking to."""
+        self.channel._process_update(_helpers.make_message("/status"))
+        text = self.cap.last_reply
+        self.assertIn("📋 Base:", text)
+        self.assertIn("Wi-Fi:", text)
+
     def test_status_with_gates(self):
         self.registry.register_gate("GATE-AAAAAA", self.key, "Front Pasture")
         self.registry.register_gate("GATE-BBBBBB", self.key, None)
@@ -327,6 +335,11 @@ class StatusAndHelpTests(_ChannelCase):
         self.assertIn("Front Pasture (GATE-AAAAAA)", text)
         self.assertIn("GATE-BBBBBB", text)
         self.assertNotIn("Front Pasture (GATE-BBBBBB)", text)
+        # Header carries base device id and SSID — must come BEFORE the
+        # gate list so the operator sees identity first.
+        self.assertIn("📋 Base:", text)
+        self.assertIn("Wi-Fi:", text)
+        self.assertLess(text.find("📋 Base:"), text.find("Front Pasture"))
 
     def test_gates_alias(self):
         self.channel._process_update(_helpers.make_message("/gates"))

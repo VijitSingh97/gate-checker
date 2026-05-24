@@ -208,6 +208,43 @@ class CapturingChannel:
         self.deletes.clear()
 
 
+class CapturingNotifier:
+    """Stand-in for `TelegramNotifier` that records every `send()`.
+
+    `BaseStation._dispatch` calls `self.notifier.send(...)` when a
+    state change is worth pinging Telegram about. Tests that exercise
+    the dispatch notify rules (alert always notifies; status notifies
+    only on a real state transition) need to see whether send was
+    called AND what message was passed. The real TelegramNotifier
+    short-circuits to `ok=False` when bot_token is empty, so it does
+    the right thing functionally but tells us nothing about what
+    *would* have been sent — this stub fills that gap.
+    """
+
+    def __init__(self) -> None:
+        self.sent: list[str] = []
+
+    @property
+    def configured(self) -> bool:
+        return True
+
+    def send(self, message: str):
+        self.sent.append(message)
+        # Match TelegramNotifier's return type loosely. Tests that
+        # check sent-or-not don't look at the return value; tests
+        # that need a TelegramSendResult-shaped object should pass
+        # a real TelegramNotifier with empty creds instead.
+        from types import SimpleNamespace
+        return SimpleNamespace(ok=True, status_code=200, reason=None, transient=False)
+
+    @property
+    def last_sent(self) -> str | None:
+        return self.sent[-1] if self.sent else None
+
+    def reset(self) -> None:
+        self.sent.clear()
+
+
 def fresh_fernet_key() -> str:
     """Return a brand-new url-safe-base64 Fernet key as a str.
 

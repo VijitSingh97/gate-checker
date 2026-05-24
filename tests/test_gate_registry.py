@@ -3,8 +3,8 @@ keys, names, replay-protection seq counters, and event history.
 
 Covers:
   - The idempotent ALTER TABLE migration that added `name` after the
-    table shipped (Session 10). A regression here would either fail
-    on first boot of an upgraded device or silently drop the name.
+    table shipped. A regression here would either fail on first boot
+    of an upgraded device or silently drop the name.
   - register_gate UPSERT semantics, including the load-bearing rule
     that `last_seq` only resets when the Fernet key actually changes.
   - accept_seq replay protection — the per-gate monotonic counter
@@ -189,6 +189,44 @@ class GateRegistryTests(unittest.TestCase):
         Prevents a forged packet for an unknown gate_id from leaking
         through as a side effect of seq bookkeeping."""
         self.assertFalse(self.registry.accept_seq("GATE-NOPE12", 1))
+
+    # ----------------------------------------------------------------------
+    # last_recorded_state — feeds the state-change-only notification logic
+    # ----------------------------------------------------------------------
+
+    def test_last_recorded_state_none_before_any_event(self):
+        self.registry.register_gate("GATE-AAAAAA", self.key, None)
+        self.assertIsNone(self.registry.last_recorded_state("GATE-AAAAAA"))
+
+    def test_last_recorded_state_extracts_state_from_summary(self):
+        self.registry.register_gate("GATE-AAAAAA", self.key, None)
+        self.registry.log_event("GATE-AAAAAA", "gate_state", "alert:open")
+        self.assertEqual(self.registry.last_recorded_state("GATE-AAAAAA"), "open")
+        self.registry.log_event("GATE-AAAAAA", "gate_state", "status:closed")
+        self.assertEqual(self.registry.last_recorded_state("GATE-AAAAAA"), "closed")
+
+    def test_last_recorded_state_picks_most_recent_by_id(self):
+        """Two rows with the same DATETIME — order has to come from id
+        (the AUTOINCREMENT primary key), not timestamp. Otherwise the
+        notify-on-transition logic would non-deterministically dedup or
+        not dedup when two events land in the same SQLite second."""
+        self.registry.register_gate("GATE-AAAAAA", self.key, None)
+        # Insert two events with a hand-rolled raw cursor so they share
+        # the same CURRENT_TIMESTAMP value to the second.
+        for state in ("open", "closed"):
+            self.registry.log_event(
+                "GATE-AAAAAA", "gate_state", f"alert:{state}"
+            )
+        # Last logged was "closed".
+        self.assertEqual(self.registry.last_recorded_state("GATE-AAAAAA"), "closed")
+
+    def test_last_recorded_state_ignores_other_event_types(self):
+        """If we ever start logging non-state events to gate_events,
+        last_recorded_state should still return the latest *state* event."""
+        self.registry.register_gate("GATE-AAAAAA", self.key, None)
+        self.registry.log_event("GATE-AAAAAA", "gate_state", "alert:open")
+        self.registry.log_event("GATE-AAAAAA", "other_type", "noise")
+        self.assertEqual(self.registry.last_recorded_state("GATE-AAAAAA"), "open")
 
 
 if __name__ == "__main__":

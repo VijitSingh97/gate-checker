@@ -96,7 +96,7 @@ class OpenCloseTests(_LoraCommandsCase):
             "reply": {"type": "alert", "state": "open"},
         }
         self.channel._process_update(_helpers.make_message("/open GATE-PASTUR"))
-        self.assertIn("✓ Opened Pasture (GATE-PASTUR)", self.cap.last_reply)
+        self.assertIn("🔓 Opened Pasture (GATE-PASTUR)", self.cap.last_reply)
         self.assertEqual(self.command_calls, [("GATE-PASTUR", "open")])
 
     def test_open_noop_when_already_open(self):
@@ -139,7 +139,7 @@ class OpenCloseTests(_LoraCommandsCase):
             "reply": {"type": "status", "state": "closed"},
         }
         self.channel._process_update(_helpers.make_message("/close GATE-PASTUR"))
-        self.assertIn("✓ Closed Pasture", self.cap.last_reply)
+        self.assertIn("🔒 Closed Pasture", self.cap.last_reply)
         self.assertEqual(self.command_calls, [("GATE-PASTUR", "close")])
 
 
@@ -177,6 +177,96 @@ class StatusOneGateTests(_LoraCommandsCase):
         self.channel._lora_status_request = None
         self.channel._process_update(_helpers.make_message("/status GATE-PASTUR"))
         self.assertIn("LoRa radio not ready", self.cap.last_reply)
+
+
+class StatusListLiveTests(_LoraCommandsCase):
+    """`/status` (no arg) queries each registered gate over LoRa and
+    renders the per-gate state next to the metadata, falling back to
+    the latest event-log state when a gate doesn't reply.
+
+    `_LoraCommandsCase` already wires `fake_status` into the channel,
+    so /status no-arg goes through the same scripted callable as
+    /status GATE-X. We can't differentiate per-gate replies with the
+    single-script setUp, so these tests script one outcome and assert
+    the per-gate rendering.
+    """
+
+    def test_live_open_renders_unlocked_emoji(self):
+        self.next_status = {
+            "outcome": "ok",
+            "reply": {"type": "status", "state": "open"},
+        }
+        self.channel._process_update(_helpers.make_message("/status"))
+        text = self.cap.last_reply
+        self.assertIn("🔓 OPEN", text)
+        self.assertIn("Pasture (GATE-PASTUR)", text)
+
+    def test_live_closed_renders_locked_emoji(self):
+        self.next_status = {
+            "outcome": "ok",
+            "reply": {"type": "status", "state": "closed"},
+        }
+        self.channel._process_update(_helpers.make_message("/status"))
+        self.assertIn("🔒 CLOSED", self.cap.last_reply)
+
+    def test_live_timeout_falls_back_to_event_log(self):
+        """Live query times out → use the most recent event-log state,
+        clearly marked 'last seen' so the operator knows it might be
+        stale."""
+        self.registry.log_event(
+            "GATE-PASTUR", self.bs.EVENT_GATE_STATE, "alert:open"
+        )
+        self.next_status = {"outcome": "timeout"}
+        self.channel._process_update(_helpers.make_message("/status"))
+        text = self.cap.last_reply
+        self.assertIn("🔓 last seen OPEN", text)
+        self.assertIn("no live reply", text)
+
+    def test_live_timeout_with_no_prior_state_shows_no_data(self):
+        """First-ever /status against a freshly-paired gate that's
+        offline — no live reply AND no prior event-log row. Must say
+        'no data' rather than crash or show a misleading state."""
+        self.next_status = {"outcome": "timeout"}
+        self.channel._process_update(_helpers.make_message("/status"))
+        self.assertIn("❓ no data", self.cap.last_reply)
+        self.assertIn("no live reply", self.cap.last_reply)
+
+    def test_live_send_failed_falls_back_to_event_log(self):
+        """Same fallback path as timeout — any non-ok outcome surfaces
+        the cached state."""
+        self.registry.log_event(
+            "GATE-PASTUR", self.bs.EVENT_GATE_STATE, "status:closed"
+        )
+        self.next_status = {"outcome": "send_failed"}
+        self.channel._process_update(_helpers.make_message("/status"))
+        self.assertIn("🔒 last seen CLOSED", self.cap.last_reply)
+
+    def test_live_query_runs_for_every_registered_gate(self):
+        """Two gates registered → fake_status must be called for both.
+        Catches a regression where the loop accidentally short-circuits
+        after the first failure."""
+        self.next_status = {"outcome": "timeout"}
+        self.channel._process_update(_helpers.make_message("/status"))
+        self.assertEqual(
+            sorted(self.status_calls),
+            ["GATE-DRIVE1", "GATE-PASTUR"],
+            "both registered gates must be queried",
+        )
+
+    def test_live_status_falls_back_when_lora_callback_missing(self):
+        """If the channel was created without a LoRa callback (brief
+        boot window) the per-gate line should still render from the
+        event log, not crash with AttributeError or NoneType call."""
+        self.registry.log_event(
+            "GATE-PASTUR", self.bs.EVENT_GATE_STATE, "alert:open"
+        )
+        self.channel._lora_status_request = None
+        self.channel._process_update(_helpers.make_message("/status"))
+        text = self.cap.last_reply
+        self.assertIn("🔓 last seen OPEN", text)
+        # And the unconditional event-log row check should not have
+        # incremented the LoRa-call count for the no-prior gate.
+        self.assertIn("❓ no data", text)
 
 
 if __name__ == "__main__":

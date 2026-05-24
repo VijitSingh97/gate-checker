@@ -185,9 +185,12 @@ class RanchGateMonitor:
             # wall-clock-based check would either always pass or always fail.
             # Replay protection comes from the single-use challenge nonce
             # (lifetime measured against time.monotonic()) and the
-            # CHALLENGE_REQ rate limit. The base, which has internet via the
-            # operator's Wi-Fi, still enforces a Fernet ttl on its receive
-            # side as a belt-and-braces measure.
+            # CHALLENGE_REQ rate limit. The base used to enforce a 30-second
+            # Fernet ttl on its receive side as belt-and-braces, but that
+            # broke when this gate (no RTC) sat 16 months behind the base's
+            # wall clock — the base rejected every packet as "expired" even
+            # with a matching key. Per-gate seq counters in the base's
+            # GateRegistry are the actual replay defense on both sides.
             decrypted = self.cipher.decrypt(encrypted)
         except InvalidToken:
             logger.debug("Dropped packet: invalid token or expired TTL")

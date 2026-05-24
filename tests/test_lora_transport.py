@@ -285,5 +285,82 @@ class WaiterRoutingTests(_TransportCase):
                 self.station._lora_waiters.pop("GATE-RADIO1", None)
 
 
+class DispatchNotifyTests(_TransportCase):
+    """Notify-rules covered: `alert` always pings Telegram; `status`
+    pings only on a real state transition; same-state status (e.g.
+    a `/status GATE-X` reply for an already-known state) is silent.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        # Replace the no-op TelegramNotifier with a recording one so we
+        # can assert on what *would* have been sent.
+        self.notifier = _helpers.CapturingNotifier()
+        self.station.notifier = self.notifier
+
+    def _dispatch(self, msg_type: str, state: str) -> None:
+        seq = self._next_seq("GATE-RADIO1")
+        self.station._dispatch(
+            "GATE-RADIO1", {"type": msg_type, "state": state, "seq": seq}
+        )
+
+    def test_alert_always_notifies(self):
+        self._dispatch("alert", "open")
+        self.assertEqual(len(self.notifier.sent), 1)
+        self.assertIn("🔓", self.notifier.last_sent)
+        self.assertIn("OPEN", self.notifier.last_sent)
+        self.assertIn("Radio (GATE-RADIO1)", self.notifier.last_sent)
+
+    def test_status_with_state_change_notifies(self):
+        # Seed prior state via a direct event-log write so dispatch
+        # sees a transition.
+        self.registry.log_event(
+            "GATE-RADIO1", self.bs.EVENT_GATE_STATE, "alert:open"
+        )
+        self._dispatch("status", "closed")
+        self.assertEqual(len(self.notifier.sent), 1)
+        self.assertIn("🔒", self.notifier.last_sent)
+        self.assertIn("CLOSED", self.notifier.last_sent)
+
+    def test_status_with_same_state_is_silent(self):
+        """The dedup that prevents `/status GATE-X` replies from
+        double-paging — a status that doesn't change the recorded
+        state must NOT fire a notification."""
+        self.registry.log_event(
+            "GATE-RADIO1", self.bs.EVENT_GATE_STATE, "alert:open"
+        )
+        self._dispatch("status", "open")
+        self.assertEqual(self.notifier.sent, [],
+                         "same-state status should not page")
+
+    def test_alert_uses_open_emoji(self):
+        self._dispatch("alert", "open")
+        self.assertTrue(self.notifier.last_sent.startswith("🔓"))
+
+    def test_alert_uses_closed_emoji(self):
+        self._dispatch("alert", "closed")
+        self.assertTrue(self.notifier.last_sent.startswith("🔒"))
+
+    def test_first_ever_status_notifies_because_no_prior_state(self):
+        """No prior event-log entry → `prior_state is None` → any
+        incoming state is a transition → notify. Catches an off-by-one
+        where the very first status from a freshly-paired gate gets
+        silently dropped because the comparison returns False on None."""
+        self._dispatch("status", "open")
+        self.assertEqual(len(self.notifier.sent), 1)
+
+    def test_prior_state_read_before_log_event(self):
+        """Regression guard for the read-after-write bug — if
+        log_event ran before last_recorded_state, the comparison
+        would always look at the just-written row and never see a
+        transition. Verified by dispatching the same state twice:
+        first call must notify (no prior), second must NOT (now
+        same state)."""
+        self._dispatch("status", "open")
+        self._dispatch("status", "open")
+        self.assertEqual(len(self.notifier.sent), 1,
+                         "second same-state status must NOT have re-paged")
+
+
 if __name__ == "__main__":
     unittest.main()

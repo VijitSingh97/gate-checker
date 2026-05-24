@@ -7,13 +7,17 @@ After=multi-user.target
 # with a stale or wrong EnvironmentFile path.
 Requires=gate-config-migrate.service
 After=gate-config-migrate.service
+# StartLimit* belong in [Unit], not [Service] — they were moved in
+# systemd v230 and now log a warning + are silently ignored if placed
+# in [Service]. Without these the Restart=on-failure loop has no
+# rate-limit and a permanently-broken gate-client would respawn forever.
+StartLimitIntervalSec=60
+StartLimitBurst=3
 
 [Service]
 Type=simple
 Restart=on-failure
 RestartSec=10
-StartLimitIntervalSec=60
-StartLimitBurst=3
 # Env file lives on ext4 after the migration unit runs. LORA_SECRET_KEY
 # is sensitive — keeping it on FAT32 /boot meant mode 0600 was advisory
 # only and any laptop with an SD-card reader could harvest it.

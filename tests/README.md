@@ -116,8 +116,9 @@ a built `.img`):
   by manual flash-and-verify on real SD cards.
 - The actual end-to-end LoRa command path — `_lora_request` is unit
   tested with a mocked serial port, but the real Pi → LoRa module →
-  air → gate path still needs hardware validation. Listed as the
-  next milestone in [Todo.md](../Todo.md).
+  air → gate path needs hardware validation. The alert path and
+  `/status GATE-X` are validated on real hardware; `/open` and
+  `/close` are pending a relay wired to the gate.
 
 ## Adding a new test
 

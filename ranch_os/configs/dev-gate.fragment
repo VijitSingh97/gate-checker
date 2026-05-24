@@ -1,0 +1,31 @@
+# --- Ranch OS Gate Development Overlay ---
+#
+# Merged on top of gate.fragment + dev.fragment when the build runs with
+# RANCH_BUILD_PROFILE=development AND the target is the gate. Adds an
+# SSH-over-USB-ethernet path so a developer can `ssh root@<dhcp-ip>` into
+# a gate without HDMI (Pi Zero W has only mini-HDMI, easy to be without
+# the right cable in the field).
+#
+# Why this is gate-only and not in the shared dev.fragment:
+#   - The base station already runs NetworkManager, which manages every
+#     interface it sees. Running systemd-networkd alongside NM with a
+#     wildcard .network file on the same box would race for control of
+#     wlan0 / eth0 on the Pi 3. The base never needs USB-eth dev access
+#     anyway — it's reachable over the operator's home Wi-Fi by design.
+#   - The gate fragment turns off networkd entirely (LoRa-only,
+#     deliberately no IP stack in prod). We re-enable it here, but only
+#     when the dev profile is in play.
+
+# Re-enable systemd-networkd to manage hotplugged ethernet interfaces.
+# Overrides BR2_PACKAGE_SYSTEMD_NETWORKD=n in gate.fragment via the standard
+# merge_config.sh "later wins" rule. Vendor preset enables the unit at
+# preset-all time, so we don't need a manual wants-symlink (which the
+# preset run would wipe anyway — see CLAUDE.md "systemd preset wipes
+# target.wants symlinks").
+BR2_PACKAGE_SYSTEMD_NETWORKD=y
+
+# Append a gate-dev-only rootfs overlay alongside the shared one. Buildroot
+# accepts a space-separated list and applies overlays in order; files in
+# later overlays win on conflict. The redefinition warning from
+# merge_config.sh on this line is expected.
+BR2_ROOTFS_OVERLAY="$(BR2_EXTERNAL_RANCH_OS_PATH)/rootfs-overlay $(BR2_EXTERNAL_RANCH_OS_PATH)/rootfs-overlay-gate-dev"

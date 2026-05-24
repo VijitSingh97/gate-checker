@@ -1,5 +1,5 @@
 """Tests for `ranch-wifi-watchdog.py` — specifically the dual-signal
-"connected" check introduced in Session 8.
+"connected" check.
 
 The watchdog calls the device "connected" only when BOTH `nmcli STATE`
 reports `connected*` AND a 3-second TCP probe to `1.1.1.1:53`

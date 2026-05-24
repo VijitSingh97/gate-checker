@@ -216,6 +216,37 @@ Both blocks come from `factory_sticker.print_sticker()`, which is the
 shared helper both scripts use so the two stickers stay visually
 aligned and can grow new fields (e.g. QR codes) in one place.
 
+### Back up `manufacturing_inventory.csv`
+
+Both provisioners append a row to `manufacturing_inventory.csv` in
+the repo root every time they run. The row carries the device ID,
+the portal password (for base stations) or the Fernet key (for
+gates), and a timestamp. The file is mode `0600`, gitignored, and
+the only off-device record of every key and password the factory
+has ever generated.
+
+**Lose this file and you lose access to every paired gate**: the
+base station's SQLite has the Fernet key for each gate it's paired
+with, but without the inventory you can't re-pair a replacement
+base, you can't validate a sticker against the on-disk truth, and
+you can't recover the portal login if you ever lose the printed
+sticker.
+
+Treat it like a credentials vault:
+
+- Back it up to a password manager (1Password, Bitwarden, etc.) or
+  an encrypted file vault (`age`, `gpg`, an encrypted .dmg). Don't
+  put it in any cloud-synced folder that you haven't deliberately
+  encrypted at rest — most cloud sync clients see the local file
+  before any client-side encryption layer.
+- After every flash, refresh the backup before moving on.
+- Don't email it, don't paste it in chat, don't commit it. The
+  `.gitignore` and the mode `0600` will help you, but the only
+  reliable defence is operator discipline.
+- If you ever believe the file has leaked, the only mitigation is
+  to `/factory_reset` every base station and re-flash every gate
+  with fresh keys.
+
 ---
 
 ## Testing
@@ -226,7 +257,7 @@ Two layers of tests catch different kinds of regression.
 
 Stdlib `unittest` suite under `tests/` covering the base-station
 Python (command channel, LoRa transport, registry, watchdog, factory
-reset). 111 tests, ~7 seconds on a developer laptop.
+reset). 130 tests, ~8 seconds on a developer laptop.
 
 ```bash
 scripts/run_tests.sh                            # default
@@ -341,10 +372,28 @@ isn't a full toolchain rebuild.
 ## Passwordless sudo on the build host
 
 The remote-build pipeline runs a handful of system commands on the
-build host: stopping/starting cache-poisoning workloads (xmrig in
-our setup), loop-mounting images for verification, and `du`-ing the
-resulting rootfs. None of those is interactive, and waiting on a
-`sudo` prompt would break `remote_build.sh`.
+build host: starting/stopping Docker around the build, loop-mounting
+the resulting image for verification, and `du`-ing the rootfs. None
+of those is interactive, and waiting on a `sudo` prompt would break
+`remote_build.sh`.
+
+### Automated setup (Debian/Ubuntu)
+
+For a fresh Debian or Ubuntu host, `scripts/setup_remote_builder.sh`
+does everything in one shot from your Mac: copies your SSH key
+(one password prompt), installs Docker + rsync + the loop-mount
+utilities, adds your remote user to the `docker` group, and writes
+the sudoers fragment shown below with `visudo` validation:
+
+```bash
+scripts/setup_remote_builder.sh --host 192.168.1.X --user vijit
+```
+
+The script is idempotent — re-run it any time you change the sudoers
+list. After it finishes, `./remote_build.sh` against the new host
+should be fully passwordless for the build pipeline itself.
+
+### Manual setup (any distro)
 
 Configure passwordless sudo on the build host for exactly those
 commands. Edit (substituting your username):
@@ -354,9 +403,7 @@ sudo visudo -f /etc/sudoers.d/ranch-build
 ```
 
 ```
-vijit ALL=(root) NOPASSWD: /usr/bin/systemctl stop xmrig, \
-                           /usr/bin/systemctl start xmrig, \
-                           /usr/bin/systemctl start docker containerd, \
+vijit ALL=(root) NOPASSWD: /usr/bin/systemctl start docker containerd, \
                            /usr/bin/systemctl stop docker.socket docker containerd, \
                            /usr/sbin/losetup, \
                            /usr/bin/mount, \
@@ -367,8 +414,8 @@ vijit ALL=(root) NOPASSWD: /usr/bin/systemctl stop xmrig, \
 ```
 
 The paths must match what `which` prints on the build host — they
-vary by distro. On Ubuntu 22.04 the paths above are correct; check
-yours with:
+vary by distro. On Ubuntu 22.04 / 24.04 the paths above are correct;
+check yours with:
 
 ```bash
 ssh <user>@<host> 'which systemctl losetup mount umount udevadm cat du'
@@ -382,6 +429,39 @@ ssh <user>@<host> sudo -n -l
 
 The listed `NOPASSWD` commands should appear with exactly the paths
 above.
+
+### Workload-specific pause/resume (xmrig, etc.)
+
+If you also run a heavy background process on the build host — a
+miner, a video encoder, a CI worker — you'll want `remote_build.sh`
+to pause it for the build and resume it afterwards via
+`RANCH_BUILD_PRE_HOOK` and `RANCH_BUILD_POST_HOOK`. Those hooks
+shell out to whatever command you set; for `sudo`-fronted commands
+to run non-interactively, the specific systemctl invocations need
+their own sudoers entries.
+
+`setup_remote_builder.sh` deliberately does **not** write these for
+you — they're operator policy, not build-pipeline policy. Add them
+yourself alongside `/etc/sudoers.d/ranch-build`. For an xmrig host:
+
+```
+vijit ALL=(root) NOPASSWD: /usr/bin/systemctl stop xmrig, \
+                           /usr/bin/systemctl start xmrig
+```
+
+Then your `remote_build.sh` invocation chains the hooks:
+
+```bash
+RANCH_BUILD_HOST=builder.lan \
+RANCH_BUILD_USER=vijit \
+RANCH_BUILD_PRE_HOOK='sudo systemctl stop xmrig && sudo systemctl start docker containerd' \
+RANCH_BUILD_POST_HOOK='sudo systemctl stop docker.socket docker containerd; sudo systemctl start xmrig' \
+./remote_build.sh
+```
+
+The post-hook fires from a `trap EXIT` in `remote_build_inner.sh`,
+so xmrig restarts whether the build succeeded, failed, or was
+interrupted with Ctrl-C.
 
 ### Passwordless image verification
 

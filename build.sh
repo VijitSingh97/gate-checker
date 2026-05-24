@@ -72,6 +72,9 @@ GATE_FRAGMENTS=("$RANCH_OS_DIR/configs/gate.fragment")
 BASE_FRAGMENTS=("$RANCH_OS_DIR/configs/base.fragment")
 if [ "$PROFILE" = "development" ]; then
     GATE_FRAGMENTS+=("$RANCH_OS_DIR/configs/dev.fragment")
+    # Gate-only dev bits (SSH over USB ethernet) — keeps systemd-networkd
+    # off the base, where NetworkManager already owns every interface.
+    GATE_FRAGMENTS+=("$RANCH_OS_DIR/configs/dev-gate.fragment")
     BASE_FRAGMENTS+=("$RANCH_OS_DIR/configs/dev.fragment")
 fi
 

@@ -1,0 +1,58 @@
+# Runs the stdlib-unittest suite + the factory-script stdlib-only
+# invariant on every push and pull request.
+#
+# Not in scope here:
+#   - scripts/verify_image.sh — needs a built .img and Linux loop-mount,
+#     which is too heavy for CI. Runs on the build host after every
+#     remote_build.sh.
+#   - Actual Buildroot builds — multi-gigabyte download + ~14 min per
+#     image, also too heavy. Validated locally + on the build host.
+
+name: tests
+
+on:
+  push:
+  pull_request:
+
+# Cancel an older in-flight run on the same ref when a new commit lands.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    # Matrix across the Python versions Buildroot is known to ship in
+    # the bcmrpi defconfigs (3.11 today, 3.12 / 3.13 in newer trees).
+    # The test suite uses `X | None` type unions which need >= 3.10.
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install runtime test dependency
+        # Only the `cryptography` package is needed — `requests` and
+        # `serial` are stubbed by tests/_helpers.py before the device
+        # code is imported.
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install cryptography
+
+      - name: Factory-script stdlib-only invariant
+        # Guards that flash_base_station.py + provision_gate.py +
+        # factory_sticker.py import nothing outside the stdlib — they
+        # need to run on any fresh laptop with just `python3`.
+        run: python scripts/check_factory_deps.py
+
+      - name: Unit tests
+        env:
+          PYTHON: python
+        run: scripts/run_tests.sh

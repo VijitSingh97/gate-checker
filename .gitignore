@@ -20,15 +20,17 @@ output_gate/
 # ==============================================================================
 # Manufacturing secrets
 # ==============================================================================
-# The factory provisioners write Fernet keys and per-device AP / portal
-# passwords here. Never commit this file.
+# The factory provisioners append Fernet keys and per-device portal
+# passwords here, one row per flashed device. Never commit it; keep it
+# in a password manager or encrypted backup if you need to retain it
+# across hosts.
 manufacturing_inventory.csv
+# Belt-and-braces: any *.env file is excluded by the `*.env` glob below,
+# but these specific names were used in earlier code paths that wrote
+# them to disk. Keeping the explicit entries means a stray copy can't
+# slip through if someone later trims the `*.env` rule.
 provision_creds.env
 temp_config.env
-# Sticker output captured from a real flash run — contains live portal
-# passwords; never commit. If you save these for your records, keep them
-# in a password manager, not the repo.
-images_notes.txt
 
 # ==============================================================================
 # Python
@@ -62,9 +64,11 @@ Thumbs.db
 .idea/
 .claude/
 *.log
-# Local-only developer log (used by Claude Code / other AI tools to
-# keep session-by-session context). Not part of the public repo.
+# Local-only maintainer notes. CLAUDE.md is a session-by-session
+# context file for AI dev tooling; Todo.md is the maintainer's working
+# backlog. Both are personal notes — not part of the public repo.
 CLAUDE.md
+Todo.md
 # Editor swap / backup files. Vim's *.swp lives next to the file being
 # edited; Emacs leaves *~ all over. Neither should ever land in git.
 *.swp

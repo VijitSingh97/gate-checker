@@ -45,7 +45,6 @@ SETUP_VALIDATED_PATH = f"{STATE_DIR}/.setup_validated"
 # cycle. Kept in sync with provision.py:SETUP_ERROR_PATH.
 SETUP_ERROR_PATH = f"{STATE_DIR}/setup_error.txt"
 
-PACKET_TTL_SECONDS = 30
 TELEGRAM_TIMEOUT_SECONDS = 5
 SERIAL_READ_TIMEOUT_SECONDS = 1.0
 LOOP_TICK_SECONDS = 0.1
@@ -78,7 +77,8 @@ PAIR_RATE_LIMIT_MAX_ATTEMPTS = 5
 PENDING_TOKEN_BYTES = 2
 # Gate IDs come from provision_gate.py: GATE- + 6-char alphabet.
 # Accept slightly broader ranges (4-12 chars) so legacy 4-char IDs from
-# Session 1 still pair and a future bump doesn't immediately break us.
+# earlier builds still pair and a future bump doesn't immediately
+# break us.
 GATE_ID_RE = re.compile(r"^GATE-[A-Z0-9]{4,12}$")
 GATE_NAME_MAX_LEN = 64
 
@@ -337,6 +337,31 @@ class GateRegistry:
                 "VALUES (?, ?, ?)",
                 (gate_id, event_type, message),
             )
+
+    def last_recorded_state(self, gate_id: str) -> str | None:
+        """Most recent open/closed state recorded for this gate, or None.
+
+        Used by _dispatch to decide whether a `status` message represents
+        a real state transition worth notifying about, or just an idempotent
+        ping (e.g. a `/status GATE-X` reply when the gate has been closed
+        the whole time). Queries the gate_events table for the latest
+        EVENT_GATE_STATE row and extracts the state from the
+        "{msg_type}:{state}" summary format that log_event stores.
+
+        Returns the bare state string ("open"/"closed"), or None if this
+        gate has never logged a state event.
+        """
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT message FROM gate_events "
+                "WHERE gate_id = ? AND event_type = ? "
+                "ORDER BY id DESC LIMIT 1",
+                (gate_id, EVENT_GATE_STATE),
+            ).fetchone()
+        if row is None or not row[0] or ":" not in row[0]:
+            return None
+        # Stored as e.g. "alert:open" or "status:closed" — keep just the state.
+        return row[0].split(":", 1)[1]
 
     def close(self) -> None:
         with self._lock:
@@ -637,7 +662,7 @@ class TelegramCommandChannel:
             # silently dropping their input.
             self._send(
                 chat_id,
-                "Could not parse that command (unmatched quote?). "
+                "❌ Could not parse that command (unmatched quote?). "
                 "Send /help for examples.",
             )
             return
@@ -664,7 +689,7 @@ class TelegramCommandChannel:
         if handler is None:
             self._send(
                 chat_id,
-                f"Unknown command /{cmd}. Send /help for the list.",
+                f"❓ Unknown command /{cmd}. Send /help for the list.",
             )
             return
         handler(message, args)
@@ -711,15 +736,15 @@ class TelegramCommandChannel:
         if chat.get("type") != "private":
             self._send(
                 chat_id,
-                "/pair must be sent in a private DM with the bot, not "
-                "a group chat — the Fernet key would leak to every "
+                "🚫 /pair must be sent in a private DM with the bot, "
+                "not a group chat — the Fernet key would leak to every "
                 "group member. DM me directly and try again.",
             )
             return
         if len(args) < 2:
             self._send(
                 chat_id,
-                'Usage: /pair GATE-XXXX <fernet-key> ["Custom Name"]\n'
+                '❓ Usage: /pair GATE-XXXX <fernet-key> ["Custom Name"]\n'
                 "The key is from the gate's factory sticker. Quote the "
                 "name if it contains spaces. Name is optional and "
                 "defaults to the gate ID.",
@@ -728,7 +753,7 @@ class TelegramCommandChannel:
         if not self._rate_limit_pair(user_id):
             self._send(
                 chat_id,
-                f"Too many /pair attempts. Wait an hour and try again "
+                f"⚠️ Too many /pair attempts. Wait an hour and try again "
                 f"(max {PAIR_RATE_LIMIT_MAX_ATTEMPTS} per "
                 f"{PAIR_RATE_LIMIT_WINDOW_SECONDS // 60} minutes).",
             )
@@ -743,7 +768,7 @@ class TelegramCommandChannel:
         if not GATE_ID_RE.match(gate_id):
             self._send(
                 chat_id,
-                f"'{gate_id}' doesn't look like a gate ID. Expected "
+                f"❌ '{gate_id}' doesn't look like a gate ID. Expected "
                 "GATE- followed by 4–12 alphanumerics (see the gate's "
                 "factory sticker).",
             )
@@ -753,7 +778,7 @@ class TelegramCommandChannel:
         except (ValueError, TypeError):
             self._send(
                 chat_id,
-                "Invalid Fernet key — keys are 44 url-safe-base64 "
+                "❌ Invalid Fernet key — keys are 44 url-safe-base64 "
                 "characters. Check the gate's factory sticker and "
                 "try /pair again. The key was redacted from your "
                 "message but is still visible to anyone with access "
@@ -763,7 +788,7 @@ class TelegramCommandChannel:
         if name and len(name) > GATE_NAME_MAX_LEN:
             self._send(
                 chat_id,
-                f"Name too long ({len(name)} chars; max "
+                f"❌ Name too long ({len(name)} chars; max "
                 f"{GATE_NAME_MAX_LEN}). Try /pair again with a "
                 "shorter name.",
             )
@@ -785,12 +810,12 @@ class TelegramCommandChannel:
             )
             if outcome["key_changed"]:
                 return (
-                    f"✓ Re-paired {label} ({gate_id}). Fernet key "
+                    f"✅ Re-paired {label} ({gate_id}). Fernet key "
                     f"replaced; sequence counter reset from {last_seq} "
                     "to 0."
                 )
             return (
-                f"✓ Updated {label} ({gate_id}) "
+                f"✅ Updated {label} ({gate_id}) "
                 "(same key, name refreshed)."
             )
 
@@ -801,7 +826,7 @@ class TelegramCommandChannel:
         )
         self._send(
             chat_id,
-            f"{gate_id} is already paired (last_seq={last_seq}).\n"
+            f"⚠️ {gate_id} is already paired (last_seq={last_seq}).\n"
             f"Confirm with `/confirm {token}` within "
             f"{PENDING_ACTION_TTL_SECONDS}s to overwrite. The Fernet "
             "key has already been redacted from your /pair line; "
@@ -817,7 +842,7 @@ class TelegramCommandChannel:
     ) -> None:
         self.registry.register_gate(gate_id, lora_key, name)
         label = f"{name} ({gate_id})" if name else gate_id
-        self._send(chat_id, f"✓ Paired {label}.")
+        self._send(chat_id, f"✅ Paired {label}.")
 
     def _rate_limit_pair(self, user_id: int) -> bool:
         """True if the user has room for one more /pair within the window."""
@@ -841,15 +866,15 @@ class TelegramCommandChannel:
         chat_id = (message.get("chat") or {}).get("id")
         user_id = (message.get("from") or {}).get("id")
         if len(args) != 1:
-            self._send(chat_id, "Usage: /unpair GATE-XXXX")
+            self._send(chat_id, "❓ Usage: /unpair GATE-XXXX")
             return
         gate_id = args[0].upper()
         if not GATE_ID_RE.match(gate_id):
-            self._send(chat_id, f"'{gate_id}' isn't a valid gate ID.")
+            self._send(chat_id, f"❌ '{gate_id}' isn't a valid gate ID.")
             return
         existing = self.registry.get_gate(gate_id)
         if existing is None:
-            self._send(chat_id, f"{gate_id} is not registered.")
+            self._send(chat_id, f"❌ {gate_id} is not registered.")
             return
         name = existing.get("name") or gate_id
         last_seen = existing.get("last_event_at") or "never"
@@ -857,9 +882,9 @@ class TelegramCommandChannel:
         def _execute() -> str:
             removed = self.registry.unregister_gate(gate_id)
             if not removed:
-                return f"{gate_id} was already gone (race with another /unpair)."
+                return f"⚠️ {gate_id} was already gone (race with another /unpair)."
             return (
-                f"✓ Removed {name} ({gate_id}). Event history "
+                f"✅ Removed {name} ({gate_id}). Event history "
                 "kept; re-pair anytime with /pair."
             )
 
@@ -870,7 +895,7 @@ class TelegramCommandChannel:
         )
         self._send(
             chat_id,
-            f"Confirm with `/confirm {token}` within "
+            f"⚠️ Confirm with `/confirm {token}` within "
             f"{PENDING_ACTION_TTL_SECONDS}s.\n"
             f"This will remove {name} ({gate_id}) "
             f"(last seen {last_seen}, last_seq="
@@ -888,32 +913,32 @@ class TelegramCommandChannel:
         if len(args) < 2:
             self._send(
                 chat_id,
-                'Usage: /rename GATE-XXXX "New Name"\n'
+                '❓ Usage: /rename GATE-XXXX "New Name"\n'
                 "Send the name without quotes for a single word.",
             )
             return
         gate_id = args[0].upper()
         if not GATE_ID_RE.match(gate_id):
-            self._send(chat_id, f"'{gate_id}' isn't a valid gate ID.")
+            self._send(chat_id, f"❌ '{gate_id}' isn't a valid gate ID.")
             return
         name = " ".join(args[1:]).strip()
         if not name:
-            self._send(chat_id, "Name cannot be empty. Use /rename "
+            self._send(chat_id, "❌ Name cannot be empty. Use /rename "
                                 "GATE-XXXX \"New Name\".")
             return
         if len(name) > GATE_NAME_MAX_LEN:
             self._send(
                 chat_id,
-                f"Name too long ({len(name)} chars; max "
+                f"❌ Name too long ({len(name)} chars; max "
                 f"{GATE_NAME_MAX_LEN}).",
             )
             return
         if self.registry.rename_gate(gate_id, name):
-            self._send(chat_id, f"✓ Renamed {gate_id} → {name}.")
+            self._send(chat_id, f"✅ Renamed {gate_id} → {name}.")
         else:
             self._send(
                 chat_id,
-                f"{gate_id} is not registered. Pair it first with /pair.",
+                f"❌ {gate_id} is not registered. Pair it first with /pair.",
             )
 
     # ------------------------------------------------------------------
@@ -926,7 +951,7 @@ class TelegramCommandChannel:
         if len(args) != 1:
             self._send(
                 chat_id,
-                "Usage: /confirm <token>  (token from the "
+                "❓ Usage: /confirm <token>  (token from the "
                 "confirmation prompt)",
             )
             return
@@ -934,7 +959,7 @@ class TelegramCommandChannel:
         if pending is None:
             self._send(
                 chat_id,
-                "Nothing to confirm — no pending action for you (or "
+                "ℹ️ Nothing to confirm — no pending action for you (or "
                 "it already expired).",
             )
             return
@@ -942,7 +967,7 @@ class TelegramCommandChannel:
             del self._pending[user_id]
             self._send(
                 chat_id,
-                f"That token expired (60s limit on {pending.summary}). "
+                f"⚠️ That token expired (60s limit on {pending.summary}). "
                 "Re-issue the command if you still want to run it.",
             )
             return
@@ -951,7 +976,7 @@ class TelegramCommandChannel:
             # only outright timeout / cancel removes the pending state.
             self._send(
                 chat_id,
-                "Token doesn't match the most recent prompt. Re-check "
+                "⚠️ Token doesn't match the most recent prompt. Re-check "
                 "the 4-char code, or /cancel to start over.",
             )
             return
@@ -967,7 +992,7 @@ class TelegramCommandChannel:
                 _redact_token(str(exc)),
             )
             reply = (
-                f"✗ {pending.summary} failed. See the device log "
+                f"❌ {pending.summary} failed. See the device log "
                 "for details."
             )
         # A closure may return None to mean "I already sent my own
@@ -982,9 +1007,9 @@ class TelegramCommandChannel:
         user_id = (message.get("from") or {}).get("id")
         pending = self._pending.pop(user_id, None)
         if pending is None:
-            self._send(chat_id, "Nothing pending to cancel.")
+            self._send(chat_id, "ℹ️ Nothing pending to cancel.")
             return
-        self._send(chat_id, f"✗ Cancelled {pending.summary}.")
+        self._send(chat_id, f"🛑 Cancelled {pending.summary}.")
 
     # ------------------------------------------------------------------
     # /status + /help
@@ -998,46 +1023,95 @@ class TelegramCommandChannel:
         if args:
             self._cmd_status_one(chat_id, args[0].upper())
             return
+        # Header carries device identity. With multiple base stations
+        # paged into the same Telegram chat (a possibility the operator
+        # chooses; we don't enforce one base per chat), the device ID
+        # and SSID disambiguate which one is replying. The SSID also
+        # makes "is this base still on the right Wi-Fi?" answerable
+        # without SSHing in.
+        base_id = socket.gethostname()
+        ssid = _current_wifi_ssid() or "(unknown)"
+        header = f"📋 Base: {base_id}  •  Wi-Fi: {ssid}"
+
         gates = self.registry.list_gates()
         if not gates:
             self._send(
                 chat_id,
-                "No gates registered. Pair one with /pair GATE-XXXX "
-                "<key> [name].",
+                f"{header}\n\nNo gates registered. Pair one with "
+                "/pair GATE-XXXX <key> [name].",
             )
             return
-        lines = [f"{len(gates)} gate(s) registered:"]
+        # Per-gate state via live LoRa status_req. Blocks for up to
+        # LORA_DEFAULT_REPLY_TIMEOUT_SECONDS per gate worst case (all
+        # gates offline). Sequential because the LoRa serial is single-
+        # threaded and _lora_tx_lock would serialize concurrent attempts
+        # anyway. Typical 1-3 gates per install → 3-15s round trip.
+        lines = [header, "", f"{len(gates)} gate(s) registered:"]
         for g in gates:
             label = g["name"] or g["gate_id"]
-            id_part = f" ({g['gate_id']})" if g["name"] else ""
+            gate_id = g["gate_id"]
+            id_part = f" ({gate_id})" if g["name"] else ""
+            state_text = self._format_gate_state(gate_id)
             lines.append(
-                f"  • {label}{id_part}  last_seq={g['last_seq']}  "
-                f"paired {g['registered_at']}"
+                f"  • {label}{id_part}: {state_text}  "
+                f"last_seq={g['last_seq']}"
             )
         self._send(chat_id, "\n".join(lines))
 
+    def _format_gate_state(self, gate_id: str) -> str:
+        """Render the per-gate state cell for /status.
+
+        Live LoRa query first; on success returns the canonical truth
+        ("🔓 OPEN" / "🔒 CLOSED"). On any failure (no LoRa, send
+        failure, timeout, gate offline), falls back to the latest
+        state from the event log clearly marked as not-live ("last
+        seen") so the operator doesn't mistake stale data for fresh
+        truth. Returns "❓ no data" when there's neither a live reply
+        nor any prior event-log state.
+        """
+        live: str | None = None
+        if self._lora_status_request is not None:
+            result = self._lora_status_request(gate_id)
+            if result.get("outcome") == "ok":
+                state = (result.get("reply") or {}).get("state")
+                if isinstance(state, str):
+                    live = state
+        if live in ("open", "closed"):
+            emoji = "🔓" if live == "open" else "🔒"
+            return f"{emoji} {live.upper()}"
+        # No live truth — show the latest event-log state with a
+        # qualifier so the operator knows it might be stale.
+        prior = self.registry.last_recorded_state(gate_id)
+        if prior in ("open", "closed"):
+            emoji = "🔓" if prior == "open" else "🔒"
+            return f"{emoji} last seen {prior.upper()} (no live reply)"
+        return "❓ no data (no live reply)"
+
     def _cmd_status_one(self, chat_id: int, gate_id: str) -> None:
         if not GATE_ID_RE.match(gate_id):
-            self._send(chat_id, f"'{gate_id}' isn't a valid gate ID.")
+            self._send(chat_id, f"❌ '{gate_id}' isn't a valid gate ID.")
             return
         if self._lora_status_request is None:
             self._send(
                 chat_id,
-                "LoRa radio not ready; live status is unavailable.",
+                "❌ LoRa radio not ready; live status is unavailable.",
             )
             return
         existing = self.registry.get_gate(gate_id)
         if existing is None:
-            self._send(chat_id, f"{gate_id} is not registered.")
+            self._send(chat_id, f"❌ {gate_id} is not registered.")
             return
         result = self._lora_status_request(gate_id)
         label = existing.get("name") or gate_id
         outcome = result.get("outcome")
         if outcome == "ok":
             state = (result.get("reply") or {}).get("state", "unknown")
+            # Lead with the state emoji so /status replies match the
+            # look of unsolicited state-change pings from _dispatch.
+            emoji = "🔓" if state == "open" else "🔒" if state == "closed" else "ℹ️"
             self._send(
                 chat_id,
-                f"{label} ({gate_id}): {state.upper()} (live).",
+                f"{emoji} {label} ({gate_id}): {state.upper()} (live).",
             )
             return
         self._send(
@@ -1060,31 +1134,35 @@ class TelegramCommandChannel:
     ) -> None:
         chat_id = (message.get("chat") or {}).get("id")
         if len(args) != 1:
-            self._send(chat_id, f"Usage: /{action} GATE-XXXX")
+            self._send(chat_id, f"❓ Usage: /{action} GATE-XXXX")
             return
         gate_id = args[0].upper()
         if not GATE_ID_RE.match(gate_id):
-            self._send(chat_id, f"'{gate_id}' isn't a valid gate ID.")
+            self._send(chat_id, f"❌ '{gate_id}' isn't a valid gate ID.")
             return
         if self._lora_command is None:
             self._send(
                 chat_id,
-                "LoRa radio not ready; gate control is unavailable.",
+                "❌ LoRa radio not ready; gate control is unavailable.",
             )
             return
         existing = self.registry.get_gate(gate_id)
         if existing is None:
             self._send(
                 chat_id,
-                f"{gate_id} is not registered. Pair it first with /pair.",
+                f"❌ {gate_id} is not registered. Pair it first with /pair.",
             )
             return
         label = existing.get("name") or gate_id
         result = self._lora_command(gate_id, action)
         outcome = result.get("outcome")
         if outcome == "ok":
+            # Use the state emoji that matches what just happened, so
+            # the command reply looks like the corresponding state
+            # notification from _dispatch.
+            emoji = "🔓" if action == "open" else "🔒"
             verb = "Opened" if action == "open" else "Closed"
-            self._send(chat_id, f"✓ {verb} {label} ({gate_id}).")
+            self._send(chat_id, f"{emoji} {verb} {label} ({gate_id}).")
             return
         if outcome == "noop":
             current = (
@@ -1094,7 +1172,7 @@ class TelegramCommandChannel:
             )
             self._send(
                 chat_id,
-                f"{label} ({gate_id}) was already {current}; "
+                f"ℹ️ {label} ({gate_id}) was already {current}; "
                 "no relay pulse fired.",
             )
             return
@@ -1107,25 +1185,25 @@ class TelegramCommandChannel:
     def _lora_failure_text(label: str, gate_id: str, outcome: str) -> str:
         """Human-readable message for the non-success LoRa outcomes."""
         if outcome == "not_registered":
-            return f"{gate_id} is not registered."
+            return f"❌ {gate_id} is not registered."
         if outcome == "no_challenge":
             return (
-                f"✗ {label} ({gate_id}) did not answer the challenge. "
+                f"❌ {label} ({gate_id}) did not answer the challenge. "
                 "Is the gate powered on and in LoRa range?"
             )
         if outcome == "timeout":
             return (
-                f"✗ {label} ({gate_id}) accepted the challenge but "
+                f"⚠️ {label} ({gate_id}) accepted the challenge but "
                 f"did not confirm. The action may still have fired — "
                 f"send `/status {gate_id}` to check."
             )
         if outcome == "send_failed":
             return (
-                f"✗ Could not transmit to {gate_id} — the LoRa serial "
+                f"❌ Could not transmit to {gate_id} — the LoRa serial "
                 "write failed. Check the device log; this is a "
                 "base-side problem, not the gate."
             )
-        return f"✗ Unknown LoRa outcome '{outcome}' for {gate_id}."
+        return f"❌ Unknown LoRa outcome '{outcome}' for {gate_id}."
 
     # ------------------------------------------------------------------
     # /factory_reset
@@ -1137,14 +1215,14 @@ class TelegramCommandChannel:
         if args:
             self._send(
                 chat_id,
-                "/factory_reset takes no arguments. Send /factory_reset "
+                "❓ /factory_reset takes no arguments. Send /factory_reset "
                 "and then /confirm <token> to proceed.",
             )
             return
         if self._factory_reset_callback is None:
             self._send(
                 chat_id,
-                "Factory reset is not available (callback not wired). "
+                "❌ Factory reset is not available (callback not wired). "
                 "Re-flash the SD card manually.",
             )
             return
@@ -1158,7 +1236,7 @@ class TelegramCommandChannel:
 
         def _execute() -> str | None:
             ack = (
-                "✓ Resetting now. You will lose this chat until the "
+                "🔄 Resetting now. You will lose this chat until the "
                 "device joins a new Wi-Fi via the BaseStation_Setup "
                 "captive portal."
             )
@@ -1177,7 +1255,7 @@ class TelegramCommandChannel:
             execute=_execute,
         )
         body = (
-            f"Confirm with `/confirm {token}` within "
+            f"⚠️ Confirm with `/confirm {token}` within "
             f"{PENDING_ACTION_TTL_SECONDS}s.\n\n"
             "This will wipe:\n"
             f"  • Wi-Fi credentials (currently: \"{ssid_text}\")\n"
@@ -1193,7 +1271,7 @@ class TelegramCommandChannel:
     def _cmd_help(self, message: dict, args: list[str]) -> None:
         chat_id = (message.get("chat") or {}).get("id")
         text = (
-            "Ranch base station commands:\n\n"
+            "❓ Ranch base station commands:\n\n"
             "Gate management\n"
             "  /pair GATE-XXXX <fernet-key> [\"Name\"]\n"
             "      Register a gate. DM only — the key is sensitive. "
@@ -1556,8 +1634,13 @@ class BaseStation:
         # "not yet valid" on a freshly-booted Pi). If NTP never syncs we
         # just skip the ping — the rest of the service is time-independent.
         if _wait_for_clock_sync():
+            # Include the device ID (hostname is set to BASE-XXXX by
+            # ranch-set-hostname at boot) so an operator with multiple
+            # base stations on multiple Telegram chats can tell at a
+            # glance which device just came online.
             result = self.notifier.send(
-                "\N{satellite antenna} Gate Monitor Base Station is Online."
+                f"\N{satellite antenna} Gate Monitor Base Station "
+                f"{socket.gethostname()} is Online."
             )
             if result.ok:
                 # First successful ping on this device → arm the
@@ -1828,10 +1911,19 @@ class BaseStation:
             return
 
         try:
-            decrypted = cipher.decrypt(encrypted, ttl=PACKET_TTL_SECONDS)
+            # No ttl= argument: the gate has no RTC and no NTP path
+            # (LoRa-only, by design), so its wall clock is whatever the
+            # kernel build epoch happens to be — typically months behind
+            # the base. A wall-clock TTL check therefore rejects every
+            # packet from a freshly-booted gate, regardless of whether
+            # the key matches. Replay protection is the per-gate seq
+            # counter in self.registry.accept_seq() below, which is the
+            # actual defense; the TTL was always a belt-and-braces
+            # complement that has now been retired as actively harmful.
+            decrypted = cipher.decrypt(encrypted)
         except InvalidToken:
             logger.warning(
-                "Dropped packet from %s: invalid token or expired TTL", gate_id
+                "Dropped packet from %s: invalid token (key mismatch?)", gate_id
             )
             return
 
@@ -1853,12 +1945,33 @@ class BaseStation:
         if msg_type in ("alert", "status"):
             state = message.get("state", "unknown")
             summary = f"{msg_type}:{state}"
+            # Read the prior state BEFORE log_event writes the new one,
+            # otherwise the comparison always finds the same state.
+            prior_state = self.registry.last_recorded_state(gate_id)
             logger.info("Gate %s -> %s", gate_id, summary)
             self.registry.log_event(gate_id, EVENT_GATE_STATE, summary)
-            if msg_type == "alert":
+
+            # Notify rules:
+            #   - `alert` always notifies (gate decided this is page-worthy,
+            #     e.g. _on_gate_opened). Preserved for backwards compat
+            #     with the existing protocol and as a "force-notify"
+            #     escape hatch the gate can use in future.
+            #   - `status` notifies only on a real state transition
+            #     (prior_state != current state). That makes the routine
+            #     close-after-open case visible in Telegram without
+            #     spamming the operator on every status_req reply from
+            #     `/status GATE-X`, which sends a `status` for the
+            #     current state regardless of whether anything changed.
+            should_notify = msg_type == "alert" or (
+                msg_type == "status" and prior_state != state
+            )
+            if should_notify:
                 name = self.registry.display_name(gate_id)
                 label = f"{name} ({gate_id})" if name else gate_id
-                self.notifier.send(f"Gate {label}: {state.upper()}")
+                # Lead with a state-emoji so the message is scannable at
+                # a glance in the operator's notification tray.
+                emoji = "🔓" if state == "open" else "🔒"
+                self.notifier.send(f"{emoji} {label}: {state.upper()}")
         else:
             logger.debug("Ignoring message type %s from %s", msg_type, gate_id)
         # Hand the same message off to any /open, /close, /status caller
