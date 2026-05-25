@@ -1,0 +1,25 @@
+#!/bin/sh
+# Set the system hostname from the per-device DEVICE_ID written into
+# /boot/provision_creds.env (base station) or /boot/gate_config.env (gate)
+# by the factory flash scripts. Runs before NetworkManager comes up so
+# DHCP and AP beacons announce the correct name.
+#
+# Idempotent and best-effort: if no DEVICE_ID is found we just leave the
+# default Buildroot hostname in place rather than failing the boot.
+
+set -eu
+
+for FILE in /boot/provision_creds.env /boot/gate_config.env; do
+    [ -r "$FILE" ] || continue
+    # `grep | cut` instead of sourcing the file — these env files come from
+    # operator-supplied values further on, and we don't want a `DEVICE_ID="...; rm -rf /"`
+    # injection vector even for a privileged context.
+    NEW=$(grep -E '^DEVICE_ID=' "$FILE" | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'")
+    if [ -n "$NEW" ]; then
+        echo "$NEW" > /etc/hostname
+        hostname "$NEW"
+        exit 0
+    fi
+done
+
+exit 0

@@ -1,0 +1,21 @@
+[Unit]
+Description=Migrate gate_config.env from FAT32 /boot to ext4 /var/lib
+# Need /boot mounted to read the source, and local-fs.target guarantees
+# /var/lib is writable too.
+RequiresMountsFor=/boot /var/lib
+After=local-fs.target
+# Ensure ranch-hostname.service has already read DEVICE_ID from /boot
+# before we move the file. /etc/hostname is written by that unit, so
+# subsequent boots don't need the file anymore — but the very first boot
+# needs the ordering enforced or the hostname won't take.
+After=ranch-hostname.service
+# Must run before the gate client tries to read its EnvironmentFile.
+Before=gate-client.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/ranch-gate-config-migrate
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

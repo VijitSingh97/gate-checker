@@ -1,0 +1,23 @@
+# --- Ranch OS Development Overlay ---
+#
+# Merged on top of gate.fragment / base.fragment when the build runs with
+# RANCH_BUILD_PROFILE=development. Adds remote debug access:
+#
+#   - Dropbear SSH server (lightweight, generates host keys on first start)
+#   - Known root password so `ssh root@<ip>` works without key setup
+#   - A small set of debug tools that are not in the production image
+#
+# DO NOT FLASH DEV IMAGES TO PRODUCTION DEVICES. The root password is
+# checked into git and dropbear listens on every interface. Dev images
+# are named with a `_dev` suffix in releases/ to make this obvious.
+
+# Set a known root password. Buildroot hashes it at build time.
+BR2_TARGET_GENERIC_ROOT_PASSWD="ranchdev"
+
+# Lightweight SSH server.
+BR2_PACKAGE_DROPBEAR=y
+
+# Debug tooling — pager, syscall tracer, network probes.
+BR2_PACKAGE_LESS=y
+BR2_PACKAGE_STRACE=y
+BR2_PACKAGE_TCPDUMP=y

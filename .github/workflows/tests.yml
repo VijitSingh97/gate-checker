@@ -1,0 +1,60 @@
+# Runs the stdlib-unittest suite + the factory-script stdlib-only
+# invariant on every push and pull request.
+#
+# Not in scope here:
+#   - scripts/verify_image.sh — needs a built .img and Linux loop-mount,
+#     which is too heavy for CI. Runs on the build host after every
+#     remote_build.sh.
+#   - Actual Buildroot builds — multi-gigabyte download + ~14 min per
+#     image, also too heavy. Validated locally + on the build host.
+
+name: tests
+
+on:
+  push:
+  pull_request:
+
+# Cancel an older in-flight run on the same ref when a new commit lands.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          # Pin to the Python version Buildroot actually ships in the
+          # bcmrpi defconfig used by this project's images. When
+          # Buildroot bumps (verify_image.sh's python-path checks
+          # surface it), bump this pin in the same commit. We don't
+          # matrix-test across multiple versions because the
+          # application is tied to whatever Python its image carries.
+          python-version: '3.11'
+          # No `cache: pip` here — actions/setup-python needs a
+          # requirements.txt or pyproject.toml to compute a cache key,
+          # and we ship neither. The single `pip install cryptography`
+          # below is fast enough that caching wouldn't materially help.
+
+      - name: Install runtime test dependency
+        # Only the `cryptography` package is needed — `requests` and
+        # `serial` are stubbed by tests/_helpers.py before the device
+        # code is imported.
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install cryptography
+
+      - name: Factory-script stdlib-only invariant
+        # Guards that flash_base_station.py + provision_gate.py +
+        # factory_sticker.py import nothing outside the stdlib — they
+        # need to run on any fresh laptop with just `python3`.
+        run: python scripts/check_factory_deps.py
+
+      - name: Unit tests
+        env:
+          PYTHON: python
+        run: scripts/run_tests.sh

@@ -1,0 +1,1 @@
+include $(sort $(wildcard $(BR2_EXTERNAL_RANCH_OS_PATH)/package/*/*.mk))

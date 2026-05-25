@@ -1,0 +1,112 @@
+# --- Core Toolchain ---
+BR2_TOOLCHAIN_BUILDROOT=y
+BR2_TOOLCHAIN_BUILDROOT_GLIBC=y
+BR2_PACKAGE_HOST_RUSTC=y
+
+# Enable systemd
+BR2_INIT_SYSTEMD=y
+BR2_SYSTEM_BIN_SH_BASH=y
+
+# Ship systemd-timesyncd so time-sync.target is satisfied at boot — the base
+# station's Fernet ttl check on LoRa packets relies on a synced clock.
+BR2_PACKAGE_SYSTEMD_TIMESYNCD=y
+
+# Enable Python 3 and required packages
+BR2_PACKAGE_PYTHON3=y
+BR2_PACKAGE_PYTHON_SERIAL=y
+BR2_PACKAGE_PYTHON_CRYPTOGRAPHY=y
+BR2_PACKAGE_PYTHON_REQUESTS=y
+BR2_PACKAGE_PYTHON3_SQLITE=y
+
+# Networking & Provisioning
+BR2_PACKAGE_NETWORK_MANAGER=y
+BR2_PACKAGE_NETWORK_MANAGER_WIFI=y
+# Explicit nmcli — in recent Buildroot the daemon and CLI are split into
+# separate config options. Without this we'd ship NetworkManager but have
+# no way to drive it from the captive portal.
+BR2_PACKAGE_NETWORK_MANAGER_CLI=y
+BR2_PACKAGE_DNSMASQ=y
+BR2_PACKAGE_PYTHON_FLASK=y
+BR2_PACKAGE_SUDO=y
+
+# Onboard Pi WiFi (and Bluetooth) firmware. The parent option is a no-op
+# without its sub-options — the .mk wraps both install steps in
+# `ifeq ($(BR2_PACKAGE_..._WIFI),y)` / `..._BT`. The package itself ships
+# blobs for BCM43430 (original Pi 3 / Pi Zero W) and BCM43455 (Pi 3 B+),
+# so we don't need anything from upstream linux-firmware as well.
+BR2_PACKAGE_BRCMFMAC_SDIO_FIRMWARE_RPI=y
+BR2_PACKAGE_BRCMFMAC_SDIO_FIRMWARE_RPI_WIFI=y
+BR2_PACKAGE_BRCMFMAC_SDIO_FIRMWARE_RPI_BT=y
+
+# rfkill is now part of util-linux. Enable util-linux explicitly so the
+# RFKILL sub-option is reachable, then turn it on.
+BR2_PACKAGE_UTIL_LINUX=y
+BR2_PACKAGE_UTIL_LINUX_RFKILL=y
+
+# wpa_supplicant is what NetworkManager uses under the hood for WPA2.
+# AP support is needed for the captive-portal hotspot; D-Bus and nl80211
+# are how NetworkManager actually drives wpa_supplicant — without them
+# NM keeps wlan0 stuck in the "unavailable" state.
+BR2_PACKAGE_WPA_SUPPLICANT=y
+BR2_PACKAGE_WPA_SUPPLICANT_AP_SUPPORT=y
+BR2_PACKAGE_WPA_SUPPLICANT_DBUS=y
+BR2_PACKAGE_WPA_SUPPLICANT_NL80211=y
+
+# Wireless regulatory database. Without regulatory.db the radio cannot
+# determine which channels/power limits are legal in any jurisdiction,
+# so it refuses to TX and NM never moves wlan0 past "unavailable".
+BR2_PACKAGE_WIRELESS_REGDB=y
+
+# `iw` is a tiny but useful diagnostic: `iw reg get`, `iw dev wlan0 info`,
+# `iw dev wlan0 scan`. Not strictly required at runtime but invaluable
+# when chasing radio bugs over SSH.
+BR2_PACKAGE_IW=y
+
+# Install your custom package
+BR2_PACKAGE_BASE_STATION=y
+
+# --- Filesystem Size ---
+# Measured rootfs usage is ~120 MB. 160 MB gives ~30% headroom for future
+# package adds without leaving hundreds of MB of zero-fill on the SD card.
+BR2_TARGET_ROOTFS_EXT2_SIZE="160M"
+
+# Rootfs overlay — adds /etc/fstab that mounts the FAT boot partition at
+# /boot at runtime, and masks serial-getty@ttyAMA0 so the LoRa radio can
+# own the UART. Without /etc/fstab the boot partition is invisible after
+# Linux comes up; without the getty mask, systemd would race base_station.py
+# for /dev/serial0.
+BR2_ROOTFS_OVERLAY="$(BR2_EXTERNAL_RANCH_OS_PATH)/rootfs-overlay"
+
+# Replace the rpi-firmware default config.txt with our copy, which sets
+# enable_uart=1 and dtoverlay=disable-bt so /dev/serial0 exists and routes
+# to the GPIO header at full PL011 reliability.
+BR2_PACKAGE_RPI_FIRMWARE_CONFIG_FILE="$(BR2_EXTERNAL_RANCH_OS_PATH)/boot/config-base.txt"
+
+# Enable Compiler Caching
+BR2_CCACHE=y
+
+# --- Size reduction ---
+# Glibc ships locale data for every language by default (~30 MB). Strip
+# everything except C / en_US — the device has no UI to display anything else.
+BR2_ENABLE_LOCALE_PURGE=y
+BR2_ENABLE_LOCALE_WHITELIST="C en_US"
+
+# Ship Python bytecode (.pyc) only, not the source (.py). Smaller image
+# and the source isn't sitting on the SD card for casual extraction.
+BR2_PACKAGE_PYTHON3_PYC_ONLY=y
+BR2_PACKAGE_PYTHON3_REMOVE_TESTS=y
+
+# Disable systemd subsystems the project doesn't use. Each line is a few
+# MB of binaries + unit files we never load.
+BR2_PACKAGE_SYSTEMD_HIBERNATE=n
+BR2_PACKAGE_SYSTEMD_HOMED=n
+BR2_PACKAGE_SYSTEMD_IMPORTD=n
+BR2_PACKAGE_SYSTEMD_MACHINED=n
+BR2_PACKAGE_SYSTEMD_NETWORKD=n
+BR2_PACKAGE_SYSTEMD_OOMD=n
+BR2_PACKAGE_SYSTEMD_PORTABLED=n
+BR2_PACKAGE_SYSTEMD_REPART=n
+BR2_PACKAGE_SYSTEMD_RESOLVED=n
+BR2_PACKAGE_SYSTEMD_SYSEXT=n
+BR2_PACKAGE_SYSTEMD_USERDB=n
+BR2_PACKAGE_SYSTEMD_VCONSOLE=n

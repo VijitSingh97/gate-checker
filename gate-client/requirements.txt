@@ -1,6 +1,0 @@
-colorzero==2.0
-dotenv==0.9.9
-gpiozero==2.0.1
-lgpio==0.2.2.0
-pyserial==3.5
-python-dotenv==1.2.2

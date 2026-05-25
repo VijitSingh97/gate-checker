@@ -1,0 +1,25 @@
+# Dev-only: DHCP any wired ethernet that shows up on the Pi Zero W.
+#
+# The Pi Zero W has no built-in ethernet port — this matches a USB-to-eth
+# adapter plugged into the data micro-USB port. Empirically, systemd's
+# predictable-naming picks `enu<bus>` (USB topology) for the Realtek
+# RTL8152 dongle on Pi Zero, not `enx<mac>` (MAC-based) like the
+# documentation might lead you to expect. Rather than enumerate every
+# possible prefix (`enx*`, `enu*`, `enp*`, `eno*`, `ens*`, plus legacy
+# `eth*`/`usb*`), we match on Type alone — `ether` covers all wired
+# interfaces and explicitly excludes wireless (Type=wlan), so wlan0
+# stays unmanaged even if Wi-Fi firmware is ever added in dev.
+
+[Match]
+Type=ether
+
+[Network]
+DHCP=yes
+LinkLocalAddressing=yes
+
+[DHCPv4]
+UseDNS=yes
+# Don't accept a hostname from the DHCP server — we set the hostname
+# ourselves from /boot/DEVICE_ID via ranch-hostname.service, and an
+# accidental DHCP-supplied hostname would clobber that.
+UseHostname=no

@@ -1,0 +1,94 @@
+#!/bin/sh
+# Dev-only: snapshot the gate's boot/network/service state to
+# /boot/dev_diag.txt. The boot partition is FAT32, so the developer
+# can eject the SD card, plug it into a macOS Finder (or any OS) and
+# read the file directly without ext4 tools or a console cable.
+#
+# This is the "black box" for a gate that won't come up on the LAN.
+# Driven by ranch-dev-diag.service (Type=simple + Restart=always +
+# RestartSec=60), so a snapshot pulled at any later moment reflects
+# the most recent state rather than the moment of boot.
+#
+# Shipped only via rootfs-overlay-gate-dev/ — production gate images
+# don't contain this script.
+
+set -u
+
+TARGET=/boot/dev_diag.txt
+TMP=$(mktemp -t dev-diag.XXXXXX)
+
+# Each command is best-effort — we never want one missing tool to
+# blank the whole report. `|| true` keeps `set -u` from tripping on a
+# non-zero exit.
+{
+    echo "=== Ranch OS dev diagnostics ==="
+    echo "generated:  $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "hostname:   $(hostname)"
+    echo "uptime:     $(cut -d' ' -f1 /proc/uptime) seconds"
+    echo "kernel:     $(uname -r)"
+    echo
+
+    # Note: Buildroot's stripped systemd build doesn't ship iproute2; the
+    # `ip` binary on the gate is busybox's, which doesn't support `-br`
+    # (the compact one-line-per-interface flag). Use the full-output
+    # forms — verbose, but they work everywhere.
+    echo "--- ip link ---"
+    ip link 2>&1 || true
+    echo
+    echo "--- ip addr ---"
+    ip addr 2>&1 || true
+    echo
+    echo "--- ip route ---"
+    ip route 2>&1 || true
+    echo
+
+    echo "--- service states ---"
+    for svc in systemd-networkd dropbear gate-client gate-config-migrate ranch-hostname; do
+        state=$(systemctl is-active "$svc" 2>/dev/null || echo unknown)
+        enabled=$(systemctl is-enabled "$svc" 2>/dev/null || echo unknown)
+        printf '%-30s active=%-10s enabled=%s\n' "$svc" "$state" "$enabled"
+    done
+    echo
+
+    echo "--- failed units ---"
+    systemctl --failed --no-pager --no-legend 2>&1 || true
+    echo
+
+    echo "--- loaded modules matching net/usb ---"
+    lsmod 2>/dev/null | grep -i -E '^(asix|ax88|cdc_|usbnet|smsc|r8152|rndis|mcs|sr9700|qmi|cdc_ether|cdc_ncm|net)' || true
+    echo
+
+    echo "--- dmesg: usb/eth/net events (last 50) ---"
+    dmesg 2>/dev/null | grep -i -E 'usb|eth|ax88|asix|rtl|smsc|net|link|carrier' | tail -50 || true
+    echo
+
+    echo "--- journalctl: systemd-networkd (last 60 lines this boot) ---"
+    journalctl -b -u systemd-networkd --no-pager -n 60 2>&1 || true
+    echo
+
+    echo "--- journalctl: gate-config-migrate (last 30 lines this boot) ---"
+    journalctl -b -u gate-config-migrate --no-pager -n 30 2>&1 || true
+    echo
+
+    echo "--- journalctl: gate-client (last 60 lines this boot) ---"
+    journalctl -b -u gate-client --no-pager -n 60 2>&1 || true
+    echo
+
+    echo "--- /var/lib/gate-client contents ---"
+    ls -la /var/lib/gate-client/ 2>&1 || true
+    echo
+
+    echo "=== end of report ==="
+} > "$TMP" 2>&1
+
+# /boot is mounted rw via fstab's `defaults`, but FAT32 is fragile on
+# power loss — sync after the write so the data hits flash. If the
+# atomic rename fails (no support on vfat across some kernel versions),
+# fall back to a plain copy.
+if mv "$TMP" "$TARGET" 2>/dev/null; then
+    :
+else
+    cp "$TMP" "$TARGET"
+    rm -f "$TMP"
+fi
+sync

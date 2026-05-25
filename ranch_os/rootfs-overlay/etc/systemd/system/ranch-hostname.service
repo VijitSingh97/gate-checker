@@ -1,0 +1,14 @@
+[Unit]
+Description=Apply hostname from /boot DEVICE_ID
+DefaultDependencies=no
+After=local-fs.target
+Before=network-pre.target NetworkManager.service
+RequiresMountsFor=/boot
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/ranch-set-hostname
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

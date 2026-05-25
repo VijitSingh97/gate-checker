@@ -1,0 +1,27 @@
+[Unit]
+Description=Dev: snapshot diagnostics to /boot/dev_diag.txt
+# Run after the rest of the system has settled, so the first snapshot
+# reflects what gate-client / systemd-networkd / gate-config-migrate
+# actually did at boot rather than racing them. RequiresMountsFor
+# guarantees /boot is mounted before the script tries to write.
+After=multi-user.target
+RequiresMountsFor=/boot
+
+[Service]
+# Type=simple + Restart=always + RestartSec=60 implements an
+# "every 60 seconds" schedule without needing a .timer unit. We avoid
+# the timer because Buildroot's `systemctl preset-all` finalize step
+# wipes overlay-installed wants-symlinks for units in /usr/lib —
+# the existing CLAUDE.md gotcha. Single-service pattern lives entirely
+# in /etc/systemd/system/ and mirrors ranch-hostname.service, which
+# survives preset cleanly.
+Type=simple
+ExecStart=/usr/bin/ranch-dev-diag
+Restart=always
+RestartSec=60
+# Cap journal noise — the script runs every 60s, no need for a
+# "Started/Finished" pair in the journal each cycle.
+StandardOutput=null
+
+[Install]
+WantedBy=multi-user.target

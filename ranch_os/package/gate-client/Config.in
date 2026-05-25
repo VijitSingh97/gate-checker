@@ -1,0 +1,14 @@
+config BR2_PACKAGE_GATE_CLIENT
+	bool "Gate Client Software"
+	depends on BR2_PACKAGE_PYTHON3
+	depends on BR2_PACKAGE_HOST_RUSTC_TARGET_ARCH_SUPPORTS
+	select BR2_PACKAGE_PYTHON_SERIAL
+	select BR2_PACKAGE_PYTHON_CRYPTOGRAPHY
+	# gpiozero drives the magnetic-sensor Button and relay OutputDevice in
+	# gate_client.py; python-rpi-gpio is its pin-factory backend on Pi Zero W
+	# (BCM2835). Without rpi-gpio, gpiozero falls through to other backends
+	# none of which we ship, and the service crashes on first GPIO access.
+	select BR2_PACKAGE_PYTHON_GPIOZERO
+	select BR2_PACKAGE_PYTHON_RPI_GPIO
+	help
+	  Installs the Ranch Gate Monitor LoRa client and systemd service.

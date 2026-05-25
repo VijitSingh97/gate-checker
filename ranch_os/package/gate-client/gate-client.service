@@ -1,0 +1,36 @@
+[Unit]
+Description=Ranch Gate Client
+After=multi-user.target
+# gate-config-migrate moves gate_config.env from FAT32 /boot to ext4
+# /var/lib/gate-client on first boot (and self-heals afterwards). We
+# Requires= it so a failure of the migration prevents us from starting
+# with a stale or wrong EnvironmentFile path.
+Requires=gate-config-migrate.service
+After=gate-config-migrate.service
+# StartLimit* belong in [Unit], not [Service] — they were moved in
+# systemd v230 and now log a warning + are silently ignored if placed
+# in [Service]. Without these the Restart=on-failure loop has no
+# rate-limit and a permanently-broken gate-client would respawn forever.
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+Restart=on-failure
+RestartSec=10
+# Env file lives on ext4 after the migration unit runs. LORA_SECRET_KEY
+# is sensitive — keeping it on FAT32 /boot meant mode 0600 was advisory
+# only and any laptop with an SD-card reader could harvest it.
+EnvironmentFile=/var/lib/gate-client/gate_config.env
+
+# systemd creates and chowns /var/lib/gate-client; gate_client.py writes the
+# persisted outbound sequence counter there so reboots don't reset replay
+# protection between the gate and the base station. The migrate unit also
+# writes gate_config.env into this directory.
+StateDirectory=gate-client
+StateDirectoryMode=0750
+
+ExecStart=/usr/bin/python3 /usr/bin/gate_client.py
+
+[Install]
+WantedBy=multi-user.target

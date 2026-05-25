@@ -1,0 +1,15 @@
+# Ranch OS boot config for the Pi 3 base station (BCM2837, 64-bit).
+# Replaces rpi-firmware default via BR2_PACKAGE_RPI_FIRMWARE_CONFIG_FILE.
+
+gpu_mem=64
+hdmi_force_hotplug=1
+disable_overscan=1
+dtparam=audio=off
+
+# LoRa serial radio on GPIO pins 8/10 via the PL011 UART.
+enable_uart=1
+dtoverlay=disable-bt
+
+# 64-bit kernel as built by Buildroot.
+kernel=Image
+arm_64bit=1

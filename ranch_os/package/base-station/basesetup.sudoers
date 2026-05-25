@@ -1,0 +1,5 @@
+# The captive portal drops to the basesetup user immediately after binding
+# port 80. The only privileged action it still needs to perform is asking
+# NetworkManager to join the operator's Wi-Fi, which is wrapped in
+# ranch-wifi-connect so the sudo grant can be scoped to a single binary.
+basesetup ALL=(root) NOPASSWD: /usr/bin/ranch-wifi-connect

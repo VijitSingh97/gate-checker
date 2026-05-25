@@ -1,40 +1,77 @@
-# --- Secret / Local Config ---
-.env
-.lgd-nfy*
+# ==============================================================================
+# Ranch OS Build System
+# ==============================================================================
+releases/
+*.img
+*.iso
+*.tar.gz
 
-# --- Python ---
-# Byte-compiled / optimized / DLL files
+# Buildroot download / compiler caches used by the Docker build.
+dl-cache/
+ccache-dir/
+
+# Buildroot scratch directories (created if Buildroot is run natively).
+buildroot/output/
+output/
+output_base/
+output_gate/
+.config.old
+
+# ==============================================================================
+# Manufacturing secrets
+# ==============================================================================
+# The factory provisioners append Fernet keys and per-device portal
+# passwords here, one row per flashed device. Never commit it; keep it
+# in a password manager or encrypted backup if you need to retain it
+# across hosts.
+manufacturing_inventory.csv
+# Belt-and-braces: any *.env file is excluded by the `*.env` glob below,
+# but these specific names were used in earlier code paths that wrote
+# them to disk. Keeping the explicit entries means a stray copy can't
+# slip through if someone later trims the `*.env` rule.
+provision_creds.env
+temp_config.env
+
+# ==============================================================================
+# Python
+# ==============================================================================
 __pycache__/
 *.py[cod]
 *$py.class
-
-# Virtual Environment (Very important to ignore the .venv folder)
+.env
+*.env
 .venv/
 venv/
 ENV/
+# Coverage / pytest artifacts — not produced by today's stdlib-unittest
+# suite, but cheap to guard against if anyone later adds coverage or
+# switches frameworks.
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
-# Distribution / packaging
-dist/
-build/
-*.egg-info/
-
-# --- Hardware & System ---
-# Ignore system-specific logs or serial port locks
-*.log
-*.lock
-
-# macOS specific (if you ever edit files on your Mac via SMB/SFTP)
+# ==============================================================================
+# IDE / OS
+# ==============================================================================
 .DS_Store
-.AppleDouble
-.LSOverride
-
-# Linux specific
-.fuse_hidden
-.directory
-.Trash-*
-
-# --- IDEs ---
-# If you use VS Code / Cursor via Remote SSH
+Thumbs.db
 .vscode/
-.history/
-*.code-workspace
+.cursor/
+.idea/
+.claude/
+*.log
+# Local-only maintainer notes. CLAUDE.md is a session-by-session
+# context file for AI dev tooling; Todo.md is the maintainer's working
+# backlog. Both are personal notes — not part of the public repo.
+CLAUDE.md
+Todo.md
+# Editor swap / backup files. Vim's *.swp lives next to the file being
+# edited; Emacs leaves *~ all over. Neither should ever land in git.
+*.swp
+*.swo
+*~
+*.bak
