@@ -70,10 +70,19 @@ rsync -avz --delete \
   --exclude='releases/' \
   --exclude='dl-cache/' \
   --exclude='ccache-dir/' \
+  --exclude='output_base/' \
+  --exclude='output_gate/' \
   --exclude='.git/' \
   --exclude='manufacturing_inventory.csv' \
   --exclude='*.env' \
   ./ "$SSH_TARGET:$REMOTE_DIR/"
+# output_base/ and output_gate/ are bind-mount targets for the
+# in-container Buildroot output. They contain x86_64 ELF binaries
+# (compiled inside the Linux container) and must stay machine-local
+# — shipping a Mac-side dir over to a Linux remote, or vice versa,
+# guarantees an "Exec format error" the next time Buildroot tries to
+# run something out of build/. Excluding them here also makes the
+# rsync fast.
 SYNC_UP_SECS=$(( SECONDS - SYNC_UP_START ))
 
 echo "-> Running build..."

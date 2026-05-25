@@ -182,21 +182,159 @@ class LoraCommandTests(_TransportCase):
 
     def test_command_timeout_after_challenge(self):
         """Challenge ok, but no follow-up reply within the command
-        window — outcome is timeout (NOT no_challenge)."""
+        window — outcome is timeout (NOT no_challenge).
+
+        The post-challenge timeout is adaptive (see
+        `_compute_actuation_threshold_seconds`). With an empty rolling
+        buffer it falls back to `ACTUATION_ABSOLUTE_CEILING_SECONDS`,
+        which we shrink here so the test doesn't take ~30s.
+        """
         self._inject_reply_async(
             "GATE-RADIO1",
             {"type": "challenge_resp", "nonce": "c" * 32},
             after=0.02,
         )
-        # Shrink the timeout so the test doesn't take 8s.
-        self.bs.LORA_COMMAND_REPLY_TIMEOUT_SECONDS = 0.3
+        original = self.bs.ACTUATION_ABSOLUTE_CEILING_SECONDS
+        self.bs.ACTUATION_ABSOLUTE_CEILING_SECONDS = 0.3
         try:
             result = self.station.lora_command("GATE-RADIO1", "open")
         finally:
-            # Restore for other tests that may import bs again — though
-            # each test loads its own module so this is belt-and-braces.
-            self.bs.LORA_COMMAND_REPLY_TIMEOUT_SECONDS = 8
+            self.bs.ACTUATION_ABSOLUTE_CEILING_SECONDS = original
         self.assertEqual(result["outcome"], "timeout")
+
+
+class LoraCommandDurationRecordingTests(_TransportCase):
+    """The adaptive grace period feeds on history: every successful
+    actuation gets recorded so future commands tune toward reality.
+    Tests assert which outcomes record (success only) and that the
+    durations land in the right (gate, action) bucket."""
+
+    def test_success_records_open_duration(self):
+        self._inject_reply_async(
+            "GATE-RADIO1",
+            {"type": "challenge_resp", "nonce": "a" * 32},
+            after=0.02,
+        )
+        self._inject_reply_async(
+            "GATE-RADIO1",
+            {"type": "alert", "state": "open"},
+            after=0.08,
+        )
+        result = self.station.lora_command("GATE-RADIO1", "open")
+        self.assertEqual(result["outcome"], "ok")
+        got = self.registry.recent_actuation_durations_ms(
+            "GATE-RADIO1", "open"
+        )
+        self.assertEqual(len(got), 1)
+        # Plausibility: 80ms scheduled delay → recorded duration must
+        # be somewhere in [10ms, 5000ms]. Loose bounds, just to catch
+        # a wildly-wrong measurement (e.g. seconds vs ms).
+        self.assertGreaterEqual(got[0], 10)
+        self.assertLessEqual(got[0], 5000)
+
+    def test_success_records_close_in_separate_bucket(self):
+        """Open and close must land in different buckets so each can
+        develop its own threshold."""
+        self._inject_reply_async(
+            "GATE-RADIO1",
+            {"type": "challenge_resp", "nonce": "b" * 32},
+            after=0.02,
+        )
+        self._inject_reply_async(
+            "GATE-RADIO1",
+            {"type": "status", "state": "closed"},
+            after=0.08,
+        )
+        self.station.lora_command("GATE-RADIO1", "close")
+        self.assertEqual(
+            len(self.registry.recent_actuation_durations_ms(
+                "GATE-RADIO1", "close"
+            )),
+            1,
+        )
+        self.assertEqual(
+            self.registry.recent_actuation_durations_ms(
+                "GATE-RADIO1", "open"
+            ),
+            [],
+            "/close must not leak into the open bucket",
+        )
+
+    def test_noop_does_not_record(self):
+        """already_open / already_closed = no relay pulse, no physical
+        actuation — recording a 0ms cycle would poison the buffer with
+        a sample that doesn't represent gate motion."""
+        self._inject_reply_async(
+            "GATE-RADIO1",
+            {"type": "challenge_resp", "nonce": "c" * 32},
+            after=0.02,
+        )
+        self._inject_reply_async(
+            "GATE-RADIO1",
+            {"type": "ack", "result": "already_open"},
+            after=0.05,
+        )
+        result = self.station.lora_command("GATE-RADIO1", "open")
+        self.assertEqual(result["outcome"], "noop")
+        self.assertEqual(
+            self.registry.recent_actuation_durations_ms(
+                "GATE-RADIO1", "open"
+            ),
+            [],
+        )
+
+    def test_timeout_does_not_record(self):
+        """A timeout means the gate may or may not have moved — we
+        don't know how long it took, if anything. Don't record."""
+        self._inject_reply_async(
+            "GATE-RADIO1",
+            {"type": "challenge_resp", "nonce": "d" * 32},
+            after=0.02,
+        )
+        original = self.bs.ACTUATION_ABSOLUTE_CEILING_SECONDS
+        self.bs.ACTUATION_ABSOLUTE_CEILING_SECONDS = 0.2
+        try:
+            result = self.station.lora_command("GATE-RADIO1", "open")
+        finally:
+            self.bs.ACTUATION_ABSOLUTE_CEILING_SECONDS = original
+        self.assertEqual(result["outcome"], "timeout")
+        self.assertEqual(
+            self.registry.recent_actuation_durations_ms(
+                "GATE-RADIO1", "open"
+            ),
+            [],
+        )
+
+    def test_send_failed_does_not_record(self):
+        self.station.lora.fail_writes = True
+        result = self.station.lora_command("GATE-RADIO1", "open")
+        self.assertEqual(result["outcome"], "send_failed")
+        self.assertEqual(
+            self.registry.recent_actuation_durations_ms(
+                "GATE-RADIO1", "open"
+            ),
+            [],
+        )
+
+    def test_threshold_shrinks_after_warmup(self):
+        """End-to-end property check: once enough history exists, the
+        effective wait is shorter than the warmup ceiling. We can't
+        observe the wait directly without timing measurements, but we
+        can observe that the threshold helper agrees."""
+        # Pre-seed history through the registry to skip warmup.
+        for d in (8000, 8500, 9000, 8200, 8800):
+            self.registry.record_actuation("GATE-RADIO1", "open", d)
+        threshold = self.bs._compute_actuation_threshold_seconds(
+            self.registry.recent_actuation_durations_ms(
+                "GATE-RADIO1", "open"
+            )
+        )
+        self.assertLess(
+            threshold,
+            self.bs.ACTUATION_ABSOLUTE_CEILING_SECONDS,
+            "post-warmup threshold for tight history should be "
+            "below the ceiling",
+        )
 
 
 class LoraStatusRequestTests(_TransportCase):

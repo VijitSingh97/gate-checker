@@ -78,8 +78,13 @@ if [ "$PROFILE" = "development" ]; then
     BASE_FRAGMENTS+=("$RANCH_OS_DIR/configs/dev.fragment")
 fi
 
-echo "Cleaning up local container scratchpads..."
-rm -rf "$OUT_GATE" "$OUT_BASE"
+# $OUT_GATE / $OUT_BASE are bind-mounted from the host (see
+# run_build.sh and scripts/remote_build_inner.sh), so build state
+# persists across container runs and rebuilds are incremental.
+# A `rm -rf` of these paths fails inside the container because you
+# can't remove a bind-mount point from within. Wipe host-side
+# (rm -rf output_base output_gate) for a clean rebuild — see
+# docs/BUILDING.md "Cleaning out the persistent output dirs".
 mkdir -p "$RELEASE_DIR" "$OUT_GATE" "$OUT_BASE"
 
 export gl_cv_func_fcntl_f_dupfd_works=yes

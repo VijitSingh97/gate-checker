@@ -80,7 +80,14 @@ docker build \
 # the container's builder user can't write to. mkdir -p creates them
 # owned by the host user, matching the BUILDER_UID/GID baked into
 # the image above.
-mkdir -p dl-cache ccache-dir releases
+#
+# output_base / output_gate are bind-mounted so Buildroot's ~10-20GB
+# of intermediate output (host tools, toolchain, target rootfs) lives
+# on a host directory we control instead of growing the Docker overlay
+# layer. Persistence across builds also makes rebuilds incremental.
+# See docs/BUILDING.md "Cleaning out the persistent output dirs" for
+# when to wipe these.
+mkdir -p dl-cache ccache-dir releases output_base output_gate
 
 echo "   [remote] Running build container (profile=$RANCH_BUILD_PROFILE, targets=$RANCH_BUILD_TARGETS)..."
 DOCKER_START=$SECONDS
@@ -91,6 +98,8 @@ docker run --rm -t \
   -v "$(pwd)/releases:/workspace/releases" \
   -v "$(pwd)/dl-cache:/workspace/buildroot/dl" \
   -v "$(pwd)/ccache-dir:/home/builder/.buildroot-ccache" \
+  -v "$(pwd)/output_base:/tmp/output_base" \
+  -v "$(pwd)/output_gate:/tmp/output_gate" \
   -v "$(pwd)/ranch_os:/workspace/ranch_os:ro" \
   -v "$(pwd)/build.sh:/workspace/build.sh:ro" \
   ranch-builder

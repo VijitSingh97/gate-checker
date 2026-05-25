@@ -52,12 +52,41 @@ LOOP_TICK_SECONDS = 0.1
 # LoRa send-and-wait timeouts. The default covers a challenge_req →
 # challenge_resp round-trip with comfortable headroom: at 9600 baud a
 # ~100-byte Fernet payload is ~80ms on the wire, the gate's processing
-# tick is 100ms, and the reply takes another 80ms. The command-reply
-# bound is longer because /open and /close trigger an async 1s relay
-# pulse on the gate, and the alert/status follow-up only sends after
-# the sensor sees the new state.
+# tick is 100ms, and the reply takes another 80ms.
 LORA_DEFAULT_REPLY_TIMEOUT_SECONDS = 5
-LORA_COMMAND_REPLY_TIMEOUT_SECONDS = 8
+
+# Adaptive grace period for /open and /close. The post-ack wait is
+# dominated by physical actuation (1s relay pulse + motor swing + reed
+# switch trip), which is a relatively stable physical process per
+# (gate, action), so a rolling buffer of recent successful cycles
+# gives a meaningful upper bound. Open and close are tracked
+# separately because they aren't symmetric on a hinged gate (gravity,
+# sag, drag).
+#
+#     threshold = min(ABSOLUTE_CEILING,
+#                     max(mean + K * stdev, mean + MIN_SLACK))
+#
+# During warmup (n < MIN_SAMPLES) we use the absolute ceiling — better
+# to wait too long than to time out a healthy gate while still
+# learning. Numbers below are tuned for a residential driveway gate
+# (swing or slide, 10–25s actuation). Tunable from the field; values
+# only affect timing-out-too-early, not correctness.
+ACTUATION_BUFFER_SAMPLES = 20
+ACTUATION_MIN_SAMPLES = 5
+ACTUATION_K_MULTIPLIER = 3.0
+ACTUATION_MIN_SLACK_SECONDS = 3.0
+ACTUATION_ABSOLUTE_CEILING_SECONDS = 30.0
+# Hard cap on rows kept per (gate_id, action) in `actuation_cycles`.
+# 100 keeps the table at a few KB per gate while still giving the
+# buffer plenty of headroom over BUFFER_SAMPLES.
+ACTUATION_RETENTION_PER_BUCKET = 100
+
+# Hard cap on rows kept per gate in `gate_events`. Several months of
+# forensic history for a residential gate (~10 events/day) and a
+# bounded steady-state DB size regardless of how long the device
+# runs. Trimmed inside `log_event` so the prune is amortized over the
+# insert rate rather than a separate sweep.
+EVENT_LOG_RETENTION_PER_GATE = 1000
 
 # Telegram command channel (long-poll + state machine for /pair, /unpair,
 # /rename, /confirm, /cancel, /status, /help). Numbers below are the
@@ -132,6 +161,39 @@ def _redact_token(text: str) -> str:
     return _BOT_TOKEN_RE.sub("<TELEGRAM_TOKEN_REDACTED>", text)
 
 
+def _compute_actuation_threshold_seconds(durations_ms: list[int]) -> float:
+    """Adaptive grace period for /open and /close, in seconds.
+
+    Takes the most recent successful actuation durations for a single
+    (gate, action) bucket. Returns the upper bound to wait before
+    declaring the command unfinished. See the constants block above
+    for the formula and tuning rationale.
+
+    During warmup (fewer than `ACTUATION_MIN_SAMPLES` real samples)
+    we return the absolute ceiling — there's no data to fit a
+    distribution against, so we err toward not timing-out a healthy
+    gate. Once warmed, the threshold is `mean + K*stdev` with two
+    bounds: a floor of `mean + MIN_SLACK` (so a tight distribution
+    can't shrink the slack below physical-jitter levels) and the
+    same ceiling (so a slowly-degrading gate can't drag the
+    threshold up to comically large values without the operator
+    noticing).
+    """
+    if len(durations_ms) < ACTUATION_MIN_SAMPLES:
+        return ACTUATION_ABSOLUTE_CEILING_SECONDS
+    n = len(durations_ms)
+    mean_s = sum(durations_ms) / n / 1000.0
+    # Population stdev — we have the whole sample, not an estimator
+    # for an unseen population. Sqrt(variance), no Bessel correction.
+    variance = sum((d / 1000.0 - mean_s) ** 2 for d in durations_ms) / n
+    stdev_s = variance ** 0.5
+    raw = max(
+        mean_s + ACTUATION_K_MULTIPLIER * stdev_s,
+        mean_s + ACTUATION_MIN_SLACK_SECONDS,
+    )
+    return min(ACTUATION_ABSOLUTE_CEILING_SECONDS, raw)
+
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
@@ -165,6 +227,16 @@ class GateRegistry:
                     last_seq INTEGER NOT NULL DEFAULT 0,
                     registered_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 );
+                CREATE TABLE IF NOT EXISTS actuation_cycles (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    gate_id TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    duration_ms INTEGER NOT NULL,
+                    recorded_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS
+                    idx_actuation_cycles_gate_action_id
+                    ON actuation_cycles (gate_id, action, id);
                 """
             )
             # `name` was added after the table shipped. SQLite has no
@@ -337,6 +409,71 @@ class GateRegistry:
                 "VALUES (?, ?, ?)",
                 (gate_id, event_type, message),
             )
+            # Trim oldest rows per gate to keep the DB bounded over years
+            # of operation. Same connection + transaction so the prune
+            # is atomic with the insert.
+            self._conn.execute(
+                "DELETE FROM gate_events "
+                "WHERE gate_id = ? AND id NOT IN ("
+                "  SELECT id FROM gate_events "
+                "  WHERE gate_id = ? "
+                "  ORDER BY id DESC LIMIT ?"
+                ")",
+                (gate_id, gate_id, EVENT_LOG_RETENTION_PER_GATE),
+            )
+
+    def record_actuation(
+        self, gate_id: str, action: str, duration_ms: int
+    ) -> None:
+        """Append one successful actuation cycle and prune to retention.
+
+        Called by `BaseStation.lora_command` after a /open or /close
+        produces a confirming state-change frame. `duration_ms` is the
+        wall-time gap between the command leaving the base and the
+        gate's reed-switch transition arriving back — measured by the
+        caller against `time.monotonic()` so NTP-step events during the
+        cycle can't corrupt the value.
+
+        Only the success path records; noop, send_failed, no_challenge,
+        and timeout do not — those samples don't represent actuation.
+        """
+        with self._lock, self._conn:
+            self._conn.execute(
+                "INSERT INTO actuation_cycles (gate_id, action, duration_ms) "
+                "VALUES (?, ?, ?)",
+                (gate_id, action, duration_ms),
+            )
+            self._conn.execute(
+                "DELETE FROM actuation_cycles "
+                "WHERE gate_id = ? AND action = ? AND id NOT IN ("
+                "  SELECT id FROM actuation_cycles "
+                "  WHERE gate_id = ? AND action = ? "
+                "  ORDER BY id DESC LIMIT ?"
+                ")",
+                (gate_id, action, gate_id, action,
+                 ACTUATION_RETENTION_PER_BUCKET),
+            )
+
+    def recent_actuation_durations_ms(
+        self,
+        gate_id: str,
+        action: str,
+        limit: int = ACTUATION_BUFFER_SAMPLES,
+    ) -> list[int]:
+        """Most recent successful actuation durations for stats input.
+
+        Returns up to `limit` durations in milliseconds, newest first.
+        Order doesn't matter for the mean/stdev math, but newest-first
+        keeps the implementation cheap (DESC limit + index hit).
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT duration_ms FROM actuation_cycles "
+                "WHERE gate_id = ? AND action = ? "
+                "ORDER BY id DESC LIMIT ?",
+                (gate_id, action, limit),
+            ).fetchall()
+        return [int(r[0]) for r in rows]
 
     def last_recorded_state(self, gate_id: str) -> str | None:
         """Most recent open/closed state recorded for this gate, or None.
@@ -1053,6 +1190,7 @@ class TelegramCommandChannel:
             id_part = f" ({gate_id})" if g["name"] else ""
             state_text = self._format_gate_state(gate_id)
             lines.append(f"  • {label}{id_part}: {state_text}")
+            lines.append(f"      {self._format_gate_timeouts(gate_id)}")
         self._send(chat_id, "\n".join(lines))
 
     def _format_gate_state(self, gate_id: str) -> str:
@@ -1084,6 +1222,29 @@ class TelegramCommandChannel:
             return f"{emoji} last seen {prior.upper()} (no live reply)"
         return "❓ no data (no live reply)"
 
+    def _format_gate_timeouts(self, gate_id: str) -> str:
+        """Render the adaptive open/close grace periods for /status.
+
+        Returns a single line like
+            "⏱ open ~15s (n=14) · close ~16s (n=18)"
+        with "(warmup)" in place of "(n=X)" when fewer than
+        ACTUATION_MIN_SAMPLES real samples back the threshold — so the
+        operator can tell at a glance whether the displayed value was
+        learned from this gate's history or is the default ceiling.
+        """
+        parts = []
+        for action in ("open", "close"):
+            durations = self.registry.recent_actuation_durations_ms(
+                gate_id, action
+            )
+            threshold = _compute_actuation_threshold_seconds(durations)
+            if len(durations) < ACTUATION_MIN_SAMPLES:
+                tag = "warmup"
+            else:
+                tag = f"n={len(durations)}"
+            parts.append(f"{action} ~{int(round(threshold))}s ({tag})")
+        return "⏱ " + " · ".join(parts)
+
     def _cmd_status_one(self, chat_id: int, gate_id: str) -> None:
         if not GATE_ID_RE.match(gate_id):
             self._send(chat_id, f"❌ '{gate_id}' isn't a valid gate ID.")
@@ -1106,14 +1267,16 @@ class TelegramCommandChannel:
             # Lead with the state emoji so /status replies match the
             # look of unsolicited state-change pings from _dispatch.
             emoji = "🔓" if state == "open" else "🔒" if state == "closed" else "ℹ️"
-            self._send(
-                chat_id,
-                f"{emoji} {label} ({gate_id}): {state.upper()} (live).",
-            )
-            return
+            header = f"{emoji} {label} ({gate_id}): {state.upper()} (live)."
+        else:
+            header = self._lora_failure_text(label, gate_id, outcome)
+        # The adaptive grace periods are stable metadata about the gate,
+        # not live data — show them in both success and failure replies
+        # so the operator always knows where their commands stand and
+        # how long they'd wait next time.
         self._send(
             chat_id,
-            self._lora_failure_text(label, gate_id, outcome),
+            f"{header}\n{self._format_gate_timeouts(gate_id)}",
         )
 
     # ------------------------------------------------------------------
@@ -1130,12 +1293,12 @@ class TelegramCommandChannel:
         self, message: dict, args: list[str], *, action: str
     ) -> None:
         chat_id = (message.get("chat") or {}).get("id")
-        if len(args) != 1:
-            self._send(chat_id, f"❓ Usage: /{action} GATE-XXXX")
-            return
-        gate_id = args[0].upper()
-        if not GATE_ID_RE.match(gate_id):
-            self._send(chat_id, f"❌ '{gate_id}' isn't a valid gate ID.")
+        if len(args) > 1:
+            self._send(
+                chat_id,
+                f"❓ Usage: /{action} [GATE-XXXX]  "
+                "(gate ID optional when only one gate is paired)",
+            )
             return
         if self._lora_command is None:
             self._send(
@@ -1143,13 +1306,46 @@ class TelegramCommandChannel:
                 "❌ LoRa radio not ready; gate control is unavailable.",
             )
             return
-        existing = self.registry.get_gate(gate_id)
-        if existing is None:
-            self._send(
-                chat_id,
-                f"❌ {gate_id} is not registered. Pair it first with /pair.",
-            )
-            return
+        if args:
+            gate_id = args[0].upper()
+            if not GATE_ID_RE.match(gate_id):
+                self._send(chat_id, f"❌ '{gate_id}' isn't a valid gate ID.")
+                return
+            existing = self.registry.get_gate(gate_id)
+            if existing is None:
+                self._send(
+                    chat_id,
+                    f"❌ {gate_id} is not registered. "
+                    "Pair it first with /pair.",
+                )
+                return
+        else:
+            # No gate specified — auto-pick the registered gate if there
+            # is exactly one. With zero or many, we can't safely guess
+            # which the operator meant (and /open the wrong gate would
+            # actually move a physical thing), so we surface a list.
+            gates = self.registry.list_gates()
+            if not gates:
+                self._send(
+                    chat_id,
+                    f"❌ No gates registered. Pair one with "
+                    f"/pair GATE-XXXX <key> [name] before /{action}.",
+                )
+                return
+            if len(gates) > 1:
+                names = ", ".join(
+                    (g["name"] or g["gate_id"]) for g in gates
+                )
+                self._send(
+                    chat_id,
+                    f"❓ Multiple gates paired ({names}). Specify "
+                    f"which: /{action} GATE-XXXX",
+                )
+                return
+            existing = gates[0]
+            gate_id = existing["gate_id"]
+            # list_gates returns a row without last_event_at; that's
+            # only consulted by /unpair's prompt, so we don't need it.
         label = existing.get("name") or gate_id
         result = self._lora_command(gate_id, action)
         outcome = result.get("outcome")
@@ -1278,15 +1474,19 @@ class TelegramCommandChannel:
             "  /rename GATE-XXXX \"New Name\"\n"
             "      Change a gate's display name.\n"
             "  /status\n"
-            "      List registered gates.\n"
+            "      List registered gates with their adaptive open/close "
+            "grace periods.\n"
             "  /status GATE-XXXX\n"
-            "      Live state query for one gate (over LoRa).\n\n"
+            "      Live state query for one gate (over LoRa), with its "
+            "current grace periods.\n\n"
             "Gate control\n"
-            "  /open GATE-XXXX\n"
+            "  /open [GATE-XXXX]\n"
             "      Open a gate. Drives the LoRa challenge / command "
-            "sequence.\n"
-            "  /close GATE-XXXX\n"
-            "      Close a gate.\n\n"
+            "sequence. Gate ID is optional when only one gate is "
+            "paired.\n"
+            "  /close [GATE-XXXX]\n"
+            "      Close a gate. Gate ID is optional when only one "
+            "gate is paired.\n\n"
             "Confirmation flow\n"
             "  /confirm <token>\n"
             "      Run the most recently prompted destructive action.\n"
@@ -1705,6 +1905,14 @@ class BaseStation:
           - "send_failed"     serial write blew up before the gate could
                               even hear us (base-side problem)
           - "timeout"         command sent, no reply observed
+
+        The post-command grace period is adaptive: we look up the last
+        N successful actuations for this (gate, action) bucket and
+        compute a threshold via `_compute_actuation_threshold_seconds`.
+        A snappy gate gets a short wait; a slow one gets the headroom
+        it needs; an actually-broken one trips the threshold faster
+        once enough samples accumulate. On success we record the
+        observed duration so future commands tune toward reality.
         """
         cipher = self.registry.cipher_for(gate_id)
         if cipher is None:
@@ -1724,6 +1932,16 @@ class BaseStation:
         if not isinstance(nonce, str):
             return {"outcome": "no_challenge"}
 
+        # Adaptive grace period from this (gate, action) bucket's
+        # rolling buffer. `time.monotonic()` for the duration: NTP can
+        # step the wall clock mid-cycle, and a `time.time()` delta
+        # would record nonsense if that happened.
+        durations = self.registry.recent_actuation_durations_ms(
+            gate_id, action
+        )
+        timeout = _compute_actuation_threshold_seconds(durations)
+        started_at = time.monotonic()
+
         reply = self._lora_request(
             gate_id,
             {"type": "command", "action": action, "nonce": nonce},
@@ -1732,14 +1950,25 @@ class BaseStation:
             # (alert on open, status on close).
             expected_types={"ack", "alert", "status"},
             cipher=cipher,
-            timeout=LORA_COMMAND_REPLY_TIMEOUT_SECONDS,
+            timeout=timeout,
         )
         if reply is self._LORA_SEND_FAILED:
             return {"outcome": "send_failed"}
         if reply is None:
             return {"outcome": "timeout"}
         if reply.get("type") == "ack":
+            # No-op: gate was already in the requested state, no relay
+            # pulse, nothing physical to time. Don't pollute the
+            # rolling buffer with what is effectively a 0ms cycle.
             return {"outcome": "noop", "reply": reply}
+        duration_ms = int((time.monotonic() - started_at) * 1000)
+        try:
+            self.registry.record_actuation(gate_id, action, duration_ms)
+        except Exception as exc:  # noqa: BLE001 — DB error must not fail the user-facing /open
+            logger.warning(
+                "Could not record actuation for %s/%s: %s",
+                gate_id, action, exc,
+            )
         return {"outcome": "ok", "reply": reply}
 
     def lora_status_request(self, gate_id: str) -> dict:

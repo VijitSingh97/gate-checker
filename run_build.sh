@@ -25,6 +25,16 @@ format_duration() {
 
 START=$SECONDS
 
+# Bind-mount the Buildroot output dirs from the host. Without this they
+# live in the container's writable layer (backed by /var/lib/docker),
+# which (a) bloats Docker storage by ~10-20GB per build and (b) means
+# every `--rm` discards the build artifacts, forcing every rebuild to
+# start from scratch. With the bind mounts the output persists across
+# runs — subsequent builds are incremental and Docker storage stays
+# flat. See docs/BUILDING.md "Cleaning out the persistent output dirs"
+# for when and how to wipe these.
+mkdir -p output_base output_gate
+
 docker run --rm -t \
   --ulimit nofile=65536:65536 \
   -e "RANCH_BUILD_PROFILE=$PROFILE" \
@@ -32,6 +42,8 @@ docker run --rm -t \
   -v "$(pwd)/releases:/workspace/releases" \
   -v "$(pwd)/dl-cache:/workspace/buildroot/dl" \
   -v "$(pwd)/ccache-dir:/home/builder/.buildroot-ccache" \
+  -v "$(pwd)/output_base:/tmp/output_base" \
+  -v "$(pwd)/output_gate:/tmp/output_gate" \
   -v "$(pwd)/ranch_os:/workspace/ranch_os:ro" \
   -v "$(pwd)/build.sh:/workspace/build.sh:ro" \
   ranch-builder

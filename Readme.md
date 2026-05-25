@@ -1,6 +1,12 @@
 # LoRa Ranch Sentinel
 
 [![tests](https://github.com/VijitSingh97/gate-checker/actions/workflows/tests.yml/badge.svg)](https://github.com/VijitSingh97/gate-checker/actions/workflows/tests.yml)
+[![Latest release](https://img.shields.io/github/v/release/VijitSingh97/gate-checker?display_name=tag&sort=semver)](https://github.com/VijitSingh97/gate-checker/releases/latest)
+[![Release date](https://img.shields.io/github/release-date/VijitSingh97/gate-checker)](https://github.com/VijitSingh97/gate-checker/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/VijitSingh97/gate-checker/total)](https://github.com/VijitSingh97/gate-checker/releases)
+![Base](https://img.shields.io/badge/base-Pi%203B%2B-c51a4a)
+![Gate](https://img.shields.io/badge/gate-Pi%20Zero%20W%20%2F%202W-c51a4a)
+[![License: MIT](https://img.shields.io/github/license/VijitSingh97/gate-checker)](LICENSE)
 
 A self-hosted gate monitoring system for properties where running power
 or pulling cellular service to every gate isn't realistic. A small
@@ -143,10 +149,22 @@ credentials, and pairing each gate over Telegram.
 reference with syntax, examples, and expected replies for every
 command the base station understands.
 
+### I want to flash a pre-built image
+→ The **[Releases page](https://github.com/VijitSingh97/gate-checker/releases/latest)**
+hosts production `.img` files for the base station and the gate,
+plus a `SHA256SUMS` file so you can verify what you downloaded
+before flashing. Each release lists the gates and base versions that
+shipped together.
+
 ### I want to build the OS images myself
 → **[docs/BUILDING.md](docs/BUILDING.md)** covers the Docker build,
 the remote-SSH build, build profiles (production vs development),
 flashing, and the test suite.
+
+### I want to cut and publish a new release
+→ **[docs/RELEASING.md](docs/RELEASING.md)** walks through the
+build-verify-tag-publish dance. The `scripts/cut_release.sh`
+helper handles the mechanical bits (verify, hash, draft).
 
 ### I want to set up a fresh build server
 → `scripts/setup_remote_builder.sh --host <ip> --user <name>` —

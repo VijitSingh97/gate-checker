@@ -64,9 +64,8 @@ Thumbs.db
 .idea/
 .claude/
 *.log
-# Local-only maintainer notes. CLAUDE.md is a session-by-session
-# context file for AI dev tooling; Todo.md is the maintainer's working
-# backlog. Both are personal notes — not part of the public repo.
+# Local-only maintainer notes — personal working files, not part of
+# the public repo.
 CLAUDE.md
 Todo.md
 # Editor swap / backup files. Vim's *.swp lives next to the file being

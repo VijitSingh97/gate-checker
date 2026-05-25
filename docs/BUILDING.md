@@ -354,18 +354,100 @@ and SSH is reachable on every interface.
 
 ## Cleaning state
 
-To rebuild from a fully clean tree:
+### What persists between builds
+
+The build scripts bind-mount several host directories into the
+container so work survives across `docker run --rm`. Each lives at
+the repo root locally, or at `~/ranch_os_build/` on the remote
+builder:
+
+| Directory | Size | What's in it | Safe to delete? |
+| --- | --- | --- | --- |
+| `dl-cache/` | ~3 GB | Upstream tarballs (kernel, busybox, etc.) Buildroot has downloaded | Yes — next build re-downloads. Slow but harmless. |
+| `ccache-dir/` | ~1 GB | Compiler output cache. Massive rebuild speedup. | Yes — next build is slow until it rewarms. |
+| `output_base/` | ~10–15 GB | Buildroot intermediate state for the base image (host tools, toolchain, package builds, target rootfs) | Yes — see below for when. |
+| `output_gate/` | ~10–15 GB | Same as above for the gate image | Yes — same rules as `output_base`. |
+| `releases/` | per build | The final `.img` files | Don't delete — these are your shippable artifacts. |
+
+`output_base/` and `output_gate/` are the big ones; the bind mounts
+exist specifically to keep them off the Docker overlay filesystem
+where they'd both bloat `/var/lib/docker` and vanish on every
+`--rm`. Persisting them on the host makes builds incremental — a
+no-op rebuild after only source edits is minutes instead of hours.
+
+### Cleaning out the persistent output dirs
+
+You usually don't need to. Buildroot is robust to incremental
+rebuilds — source edits, overlay file changes, application code
+changes, and the typical config-fragment tweaks are all handled
+correctly without a clean.
+
+Clean when:
+
+- **You changed `BR2_*` config in a way that removed a package.**
+  Buildroot doesn't always remove the now-deselected package's
+  files from the staging area / target rootfs.
+- **You bumped the `buildroot/` submodule.** Different Buildroot
+  versions can produce subtly different output and a clean rebuild
+  avoids hours of debugging weird symptoms.
+- **You changed the target architecture, libc, or toolchain config.**
+  Anything that affects host tools or the cross-compiler.
+- **You're cutting a release.** A clean rebuild against the tagged
+  commit is the most reproducible state to ship from.
+- **You're seeing "this shouldn't be happening" errors** — a build
+  step succeeds on incremental but fails after `make distclean`, or
+  vice versa.
+
+How:
+
+```bash
+# Local — from the repo root:
+rm -rf output_base output_gate
+
+# Remote builder — from your laptop:
+ssh vijit@192.168.1.249 'rm -rf ranch_os_build/output_base ranch_os_build/output_gate'
+
+# Selective — just nuke the broken one and let the other stay warm:
+rm -rf output_base    # base only
+```
+
+The next build is a full Buildroot run for whatever you wiped
+(~45 min per target on a fast box). `dl-cache/` and `ccache-dir/`
+survive the wipe, so toolchain compilation and most third-party
+package compilation gets ccache hits — substantially faster than a
+truly-cold rebuild.
+
+How often: a few times a year for steady-state development. Always
+before cutting a release if you want belt-and-braces reproducibility.
+
+### Deeper clean — Docker image too
+
+If a Dockerfile change is involved or the container itself is misbehaving:
+
+```bash
+# Local
+rm -rf output_base output_gate
+docker build --no-cache -t ranch-builder .
+./run_build.sh
+
+# Remote — let remote_build.sh rebuild the container automatically
+# (it does so each run), just nuke the output dirs:
+ssh vijit@192.168.1.249 'rm -rf ranch_os_build/output_base ranch_os_build/output_gate'
+./remote_build.sh
+```
+
+The nuclear option (also clears `dl-cache/` and `ccache-dir/`):
 
 ```bash
 ( cd buildroot && make distclean )
+rm -rf dl-cache ccache-dir output_base output_gate
 docker build --no-cache -t ranch-builder .
 ./run_build.sh
 ```
 
-This wipes the per-target Buildroot output trees and rebuilds the
-container image from scratch. Use sparingly — `dl-cache/` and
-`ccache-dir/` are intentionally preserved so the next clean build
-isn't a full toolchain rebuild.
+Use sparingly — that's a 1.5–3 hour cold rebuild because every
+upstream tarball gets re-downloaded and every toolchain stage
+recompiled.
 
 ---
 
