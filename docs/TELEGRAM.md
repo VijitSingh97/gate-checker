@@ -21,8 +21,8 @@ back to when you have a specific command in mind.
 | `/pair GATE-XXXX <key> ["Name"]` | Register a gate. **Must be sent in a private DM with the bot.** |
 | `/unpair GATE-XXXX` | Remove a gate. Requires `/confirm`. |
 | `/rename GATE-XXXX "New Name"` | Change a gate's display name. |
-| `/open GATE-XXXX` | Open a gate via the LoRa challenge/command sequence. |
-| `/close GATE-XXXX` | Close a gate. |
+| `/open [GATE-XXXX]` | Open a gate via the LoRa challenge/command sequence. |
+| `/close [GATE-XXXX]` | Close a gate. |
 | `/factory_reset` | Wipe Wi-Fi, Telegram, and gate state; reboot into the captive portal. Requires `/confirm`. |
 | `/confirm <token>` | Acknowledge the most recent destructive prompt. |
 | `/cancel` | Abort any pending `/confirm`. |
@@ -206,7 +206,9 @@ No gates registered. Pair one with /pair GATE-XXXX <key> [name].
 
 2 gate(s) registered:
   • Front Pasture (GATE-A1B2C3): 🔓 OPEN
+      ⏱ open ~15s (n=14) · close ~16s (n=18)
   • Back Gate (GATE-B7Z3K4): 🔒 last seen CLOSED (no live reply)
+      ⏱ open ~30s (warmup) · close ~30s (warmup)
 ```
 
 The header line carries the base's device ID and the currently-
@@ -225,6 +227,16 @@ log, marked `last seen X (no live reply)` so you can tell it might
 be stale. A freshly-paired gate that has never reported and isn't
 responding shows `❓ no data (no live reply)`.
 
+The `⏱` line under each gate is the adaptive grace period the base
+will wait for `/open` and `/close` against that gate, separately for
+each direction. `(n=X)` means the threshold is computed from this
+gate's last X successful actuation cycles; `(warmup)` means the
+gate hasn't logged enough samples yet (fewer than 5) and the base
+is falling back to the 30s default ceiling. As the gate gets more
+real-world use the threshold tightens to match the gate's actual
+cycle time. Newly-paired gates start in warmup until you've used
+`/open` or `/close` against them enough to fill the buffer.
+
 The list is sorted by pairing time, oldest first.
 
 ---
@@ -241,21 +253,30 @@ The list is sorted by pairing time, oldest first.
 **Reply (success):**
 ```
 🔒 Front Pasture (GATE-A1B2C3): CLOSED (live).
+⏱ open ~15s (n=14) · close ~16s (n=18)
 ```
 
 **Reply (gate offline / out of range):**
 ```
 ❌ Front Pasture (GATE-A1B2C3) did not answer the challenge. Is the gate powered on and in LoRa range?
+⏱ open ~15s (n=14) · close ~16s (n=18)
 ```
 
 **Reply (base-side radio failure):**
 ```
 ❌ Could not transmit to GATE-A1B2C3 — the LoRa serial write failed. Check the device log; this is a base-side problem, not the gate.
+⏱ open ~15s (n=14) · close ~16s (n=18)
 ```
 
 This sends a real `status_req` packet over LoRa and waits up to 5
 seconds for the gate to reply. Different from `/status` (no arg),
-which only reads the local database.
+which only reads the local database. The second line is the
+adaptive `/open` and `/close` grace period for this gate (see the
+no-arg `/status` section above for the `(n=X)` vs `(warmup)`
+explanation). The grace-period line is stable metadata about the
+gate's actuation profile, so it appears on both success and failure
+replies — even when the gate didn't answer the live query, you can
+still see the wait you'd face on the next attempt.
 
 Use this when:
 - The gate hasn't sent an alert in a while and you want to confirm
@@ -408,11 +429,31 @@ your mind. Alerts from that gate will use the new name immediately.
 
 ### `/open` — open a gate
 
-**Syntax:** `/open GATE-XXXX`
+**Syntax:** `/open [GATE-XXXX]`
+
+The gate ID is optional when exactly one gate is paired — the base
+will auto-select it. With zero or multiple gates paired the base
+asks you to specify, rather than guessing (driving the wrong gate
+physically moves something).
 
 **Example:**
 ```
 /open GATE-A1B2C3
+```
+
+**Example (single-gate install, no ID needed):**
+```
+/open
+```
+
+**Reply (no gates paired):**
+```
+❌ No gates registered. Pair one with /pair GATE-XXXX <key> [name] before /open.
+```
+
+**Reply (multiple gates, ambiguous):**
+```
+❓ Multiple gates paired (Front Pasture, Back Pasture). Specify which: /open GATE-XXXX
 ```
 
 **Reply (success):**
@@ -452,10 +493,11 @@ reported back. `/status GATE-XXXX` is the live truth check.
 
 ### `/close` — close a gate
 
-**Syntax:** `/close GATE-XXXX`
+**Syntax:** `/close [GATE-XXXX]`
 
 Identical to `/open` in every way, with `closed` as the target
-state. The success reply leads with 🔒 (matching the close-state
+state. Gate ID is optional under the same single-gate auto-select
+rule. The success reply leads with 🔒 (matching the close-state
 emoji):
 ```
 🔒 Closed Front Pasture (GATE-A1B2C3).

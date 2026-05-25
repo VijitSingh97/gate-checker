@@ -19,9 +19,10 @@
 # Re-enable systemd-networkd to manage hotplugged ethernet interfaces.
 # Overrides BR2_PACKAGE_SYSTEMD_NETWORKD=n in gate.fragment via the standard
 # merge_config.sh "later wins" rule. Vendor preset enables the unit at
-# preset-all time, so we don't need a manual wants-symlink (which the
-# preset run would wipe anyway — see CLAUDE.md "systemd preset wipes
-# target.wants symlinks").
+# preset-all time, so we don't need a manual wants-symlink — Buildroot's
+# `systemctl preset-all` step (run by SYSTEMD_INSTALL_INIT_PRESET in
+# SYSTEMD_TARGET_FINALIZE_HOOKS) wipes manually-installed
+# target.wants/ symlinks pointing at /usr/lib units anyway.
 BR2_PACKAGE_SYSTEMD_NETWORKD=y
 
 # Append a gate-dev-only rootfs overlay alongside the shared one. Buildroot

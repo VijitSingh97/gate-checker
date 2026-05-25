@@ -77,10 +77,12 @@ class OpenCloseTests(_LoraCommandsCase):
         self.channel._process_update(_helpers.make_message("/open GATE-NOPEXX"))
         self.assertIn("not registered", self.cap.last_reply)
 
-    def test_open_wrong_arg_count(self):
-        self.channel._process_update(_helpers.make_message("/open"))
-        self.assertIn("Usage:", self.cap.last_reply)
-        self.channel._process_update(_helpers.make_message("/open GATE-PASTUR extra"))
+    def test_open_too_many_args(self):
+        """Extra positional args still hit the usage hint; the new no-arg
+        path is covered separately."""
+        self.channel._process_update(
+            _helpers.make_message("/open GATE-PASTUR extra")
+        )
         self.assertIn("Usage:", self.cap.last_reply)
 
     def test_open_unavailable_when_radio_callback_missing(self):
@@ -141,6 +143,67 @@ class OpenCloseTests(_LoraCommandsCase):
         self.channel._process_update(_helpers.make_message("/close GATE-PASTUR"))
         self.assertIn("🔒 Closed Pasture", self.cap.last_reply)
         self.assertEqual(self.command_calls, [("GATE-PASTUR", "close")])
+
+
+class OpenCloseDefaultGateTests(_LoraCommandsCase):
+    """`/open` and `/close` accept the gate ID as optional — if exactly
+    one gate is paired we auto-select it, with zero or multiple we
+    refuse rather than guess (acting on the wrong gate physically
+    moves something).
+
+    The shared `_LoraCommandsCase.setUp` registers two gates; tests
+    that need a single-gate scenario unregister one, and the zero-gate
+    scenario unregisters both.
+    """
+
+    def test_open_no_args_with_zero_gates_explains(self):
+        self.registry.unregister_gate("GATE-PASTUR")
+        self.registry.unregister_gate("GATE-DRIVE1")
+        self.channel._process_update(_helpers.make_message("/open"))
+        text = self.cap.last_reply
+        self.assertIn("No gates registered", text)
+        self.assertIn("/pair", text)
+        self.assertEqual(self.command_calls, [],
+                         "no LoRa traffic when no gate to drive")
+
+    def test_open_no_args_with_one_gate_auto_selects(self):
+        self.registry.unregister_gate("GATE-DRIVE1")
+        self.next_command = {
+            "outcome": "ok",
+            "reply": {"type": "alert", "state": "open"},
+        }
+        self.channel._process_update(_helpers.make_message("/open"))
+        self.assertIn("🔓 Opened Pasture (GATE-PASTUR)", self.cap.last_reply)
+        self.assertEqual(self.command_calls, [("GATE-PASTUR", "open")])
+
+    def test_open_no_args_with_many_gates_asks_which(self):
+        self.channel._process_update(_helpers.make_message("/open"))
+        text = self.cap.last_reply
+        self.assertIn("Multiple gates", text)
+        # Both gates must be named so the operator can copy/paste one.
+        self.assertIn("Pasture", text)
+        self.assertIn("GATE-DRIVE1", text)
+        self.assertEqual(self.command_calls, [],
+                         "ambiguous /open must not fire any LoRa traffic")
+
+    def test_close_no_args_with_one_gate_auto_selects(self):
+        """Same path as /open — proves the action carries through and
+        the auto-select isn't accidentally hard-coded to open."""
+        self.registry.unregister_gate("GATE-DRIVE1")
+        self.next_command = {
+            "outcome": "ok",
+            "reply": {"type": "status", "state": "closed"},
+        }
+        self.channel._process_update(_helpers.make_message("/close"))
+        self.assertIn("🔒 Closed Pasture", self.cap.last_reply)
+        self.assertEqual(self.command_calls, [("GATE-PASTUR", "close")])
+
+    def test_no_args_message_mentions_the_action_in_use(self):
+        """The 'multiple gates' prompt suggests the same command the
+        operator just typed — a /close hint with 'try /open' would be
+        confusing."""
+        self.channel._process_update(_helpers.make_message("/close"))
+        self.assertIn("/close GATE-XXXX", self.cap.last_reply)
 
 
 class StatusOneGateTests(_LoraCommandsCase):
@@ -267,6 +330,120 @@ class StatusListLiveTests(_LoraCommandsCase):
         # And the unconditional event-log row check should not have
         # incremented the LoRa-call count for the no-prior gate.
         self.assertIn("❓ no data", text)
+
+
+class StatusTimeoutDisplayTests(_LoraCommandsCase):
+    """The adaptive /open and /close grace periods are surfaced in both
+    /status (list) and /status GATE-X. Operators get the warmup vs
+    learned distinction inline so they can tell whether the displayed
+    value reflects this gate's actual history."""
+
+    def _seed_actuation(self, gate_id: str, action: str, samples: list[int]) -> None:
+        for d in samples:
+            self.registry.record_actuation(gate_id, action, d)
+
+    def test_status_one_includes_timeout_line_on_success(self):
+        self.next_status = {
+            "outcome": "ok",
+            "reply": {"type": "status", "state": "closed"},
+        }
+        self.channel._process_update(
+            _helpers.make_message("/status GATE-PASTUR")
+        )
+        text = self.cap.last_reply
+        self.assertIn("⏱", text)
+        self.assertIn("open", text)
+        self.assertIn("close", text)
+        # State line comes first; timeout line second.
+        state_idx = text.find("CLOSED (live)")
+        timeout_idx = text.find("⏱")
+        self.assertGreater(state_idx, 0)
+        self.assertGreater(timeout_idx, state_idx)
+
+    def test_status_one_warmup_label_with_no_history(self):
+        """Fresh gate with no actuations recorded — both buckets
+        should render as (warmup), not as (n=0)."""
+        self.next_status = {
+            "outcome": "ok",
+            "reply": {"type": "status", "state": "open"},
+        }
+        self.channel._process_update(
+            _helpers.make_message("/status GATE-PASTUR")
+        )
+        text = self.cap.last_reply
+        # Two "warmup" occurrences, one for each action.
+        self.assertEqual(text.count("warmup"), 2)
+        self.assertNotIn("n=0", text)
+
+    def test_status_one_uses_n_count_once_warmed(self):
+        """Past MIN_SAMPLES the tag switches to n=X. The threshold
+        also drops below the warmup ceiling."""
+        self._seed_actuation(
+            "GATE-PASTUR", "open", [12000, 12500, 11500, 12200, 12800]
+        )
+        self.next_status = {
+            "outcome": "ok",
+            "reply": {"type": "status", "state": "open"},
+        }
+        self.channel._process_update(
+            _helpers.make_message("/status GATE-PASTUR")
+        )
+        text = self.cap.last_reply
+        self.assertIn("open ~", text)
+        self.assertIn("(n=5)", text)
+        # The close bucket is still empty, so it stays in warmup.
+        self.assertIn("warmup", text)
+
+    def test_status_one_failure_still_shows_timeouts(self):
+        """The grace periods are stable metadata, not live data.
+        Show them even when the gate didn't reply to status_req — the
+        operator can still see the wait they'd face on the next
+        attempt."""
+        self.next_status = {"outcome": "timeout"}
+        self.channel._process_update(
+            _helpers.make_message("/status GATE-PASTUR")
+        )
+        text = self.cap.last_reply
+        self.assertIn("did not confirm", text)
+        self.assertIn("⏱", text)
+        self.assertIn("open", text)
+
+    def test_status_list_shows_timeouts_per_gate(self):
+        """The no-arg /status list gets a timeout line under each
+        gate, indented to read as supplementary detail."""
+        self._seed_actuation(
+            "GATE-PASTUR", "open", [10000, 11000, 12000, 13000, 14000]
+        )
+        self.next_status = {
+            "outcome": "ok",
+            "reply": {"type": "status", "state": "open"},
+        }
+        self.channel._process_update(_helpers.make_message("/status"))
+        text = self.cap.last_reply
+        # One timeout line per gate (we have two gates in setUp).
+        self.assertEqual(text.count("⏱"), 2)
+        # Indented under each gate bullet, not flush-left.
+        for line in text.splitlines():
+            if "⏱" in line:
+                self.assertTrue(
+                    line.startswith(" "),
+                    f"timeout line should be indented: {line!r}",
+                )
+
+    def test_status_list_distinguishes_warmed_and_warmup_gates(self):
+        """One gate has open history, the other doesn't — both should
+        render but with different tags so the operator can see which
+        gates have learned values."""
+        self._seed_actuation(
+            "GATE-PASTUR", "open", [9000, 10000, 11000, 9500, 10500]
+        )
+        self.next_status = {"outcome": "timeout"}
+        self.channel._process_update(_helpers.make_message("/status"))
+        text = self.cap.last_reply
+        # Pasture's open bucket is warmed → "n=5". Drive1 has no
+        # history → "warmup". Both visible in the same message.
+        self.assertIn("n=5", text)
+        self.assertIn("warmup", text)
 
 
 if __name__ == "__main__":

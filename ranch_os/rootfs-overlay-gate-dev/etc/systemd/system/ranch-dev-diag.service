@@ -11,10 +11,10 @@ RequiresMountsFor=/boot
 # Type=simple + Restart=always + RestartSec=60 implements an
 # "every 60 seconds" schedule without needing a .timer unit. We avoid
 # the timer because Buildroot's `systemctl preset-all` finalize step
-# wipes overlay-installed wants-symlinks for units in /usr/lib —
-# the existing CLAUDE.md gotcha. Single-service pattern lives entirely
-# in /etc/systemd/system/ and mirrors ranch-hostname.service, which
-# survives preset cleanly.
+# (SYSTEMD_INSTALL_INIT_PRESET in SYSTEMD_TARGET_FINALIZE_HOOKS) wipes
+# overlay-installed wants-symlinks that point at /usr/lib units.
+# Keeping the single-service pattern entirely under /etc/systemd/system/
+# (mirroring ranch-hostname.service) survives that preset cleanly.
 Type=simple
 ExecStart=/usr/bin/ranch-dev-diag
 Restart=always
