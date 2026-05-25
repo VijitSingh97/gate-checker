@@ -84,15 +84,14 @@ command.
   checks against every built image — including a production-profile
   block that fails the build if any dev-only artifact (dropbear,
   debug tools, gate-side networkd) leaks into a shippable image.
-- ✅ **Unit suite**: 130 stdlib-`unittest` tests, ~8s end-to-end via
+- ✅ **Gate actuation on real hardware**: `/open` and `/close` drive
+  a relay wired to the gate's `RELAY_GPIO` pin (default BCM 17), the
+  reed switch reports the new state back, and the base records the
+  cycle duration into its adaptive grace-period buffer so subsequent
+  commands wait against a threshold learned from that gate's actual
+  mechanical behavior.
+- ✅ **Unit suite**: 165 stdlib-`unittest` tests, ~9s end-to-end via
   `scripts/run_tests.sh`. Pre-commit hook runs it on every commit.
-
-⚠️ **Not yet exercised against real hardware**: `/open` and `/close`.
-The wire code is complete, the challenge/response machinery is
-unit-tested, and `/status GATE-XXXX` (which uses the same LoRa
-request/reply plumbing) works end-to-end. They just need a relay
-wired to the gate's `RELAY_GPIO` pin (default BCM 17) so there's
-something for the gate to drive when the command arrives.
 
 ## Repository layout
 
@@ -226,9 +225,12 @@ Full threat model with attacker scenarios is in
 
 ## Status
 
-Production-validated for the alert path and every command except
-`/open` and `/close` (those need a relay wired to the gate first).
-Working hobby-grade system for a single ranch with one operator.
+Production-validated end-to-end on real hardware — alerts, every
+Telegram command (`/pair`, `/unpair`, `/rename`, `/status`,
+`/status GATE-X`, `/open`, `/close`, `/factory_reset`, `/confirm`,
+`/cancel`, `/help`), the captive-portal setup flow, the Wi-Fi
+watchdog, and production-profile image hygiene. Working hobby-grade
+system for a single ranch with one operator.
 
 ## License
 

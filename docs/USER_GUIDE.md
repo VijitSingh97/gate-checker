@@ -336,9 +336,12 @@ diagnostic message if something went wrong. See
 [TELEGRAM.md](TELEGRAM.md#open--open-a-gate) for the full set of
 replies.
 
-> ⚠️ The `/open` and `/close` commands are implemented but have not
-> yet been validated against real LoRa hardware. If you're an early
-> tester, please report what you see.
+The base learns each gate's actuation timing as you use it — open
+and close cycle durations get recorded into a per-gate rolling
+buffer, and subsequent commands wait against a threshold computed
+from that history. Newly paired gates start with a 30-second
+default grace period until enough cycles fill the buffer (~5
+cycles per direction).
 
 ### Renaming a gate
 

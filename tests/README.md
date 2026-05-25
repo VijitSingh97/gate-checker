@@ -115,10 +115,10 @@ a built `.img`):
   `scripts/check_factory_deps.py` (the stdlib-only invariant) and
   by manual flash-and-verify on real SD cards.
 - The actual end-to-end LoRa command path — `_lora_request` is unit
-  tested with a mocked serial port, but the real Pi → LoRa module →
-  air → gate path needs hardware validation. The alert path and
-  `/status GATE-X` are validated on real hardware; `/open` and
-  `/close` are pending a relay wired to the gate.
+  tested with a mocked serial port. The real Pi → LoRa module → air
+  → gate path (alerts, `/status GATE-X`, `/open`, `/close`) has been
+  validated on real hardware; that validation lives outside the
+  unit-test suite by necessity.
 
 ## Adding a new test
 
