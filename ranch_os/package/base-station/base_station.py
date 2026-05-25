@@ -1052,10 +1052,7 @@ class TelegramCommandChannel:
             gate_id = g["gate_id"]
             id_part = f" ({gate_id})" if g["name"] else ""
             state_text = self._format_gate_state(gate_id)
-            lines.append(
-                f"  • {label}{id_part}: {state_text}  "
-                f"last_seq={g['last_seq']}"
-            )
+            lines.append(f"  • {label}{id_part}: {state_text}")
         self._send(chat_id, "\n".join(lines))
 
     def _format_gate_state(self, gate_id: str) -> str:

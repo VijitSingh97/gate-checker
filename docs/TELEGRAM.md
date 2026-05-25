@@ -205,8 +205,8 @@ No gates registered. Pair one with /pair GATE-XXXX <key> [name].
 📋 Base: BASE-9A22  •  Wi-Fi: HomeNetwork
 
 2 gate(s) registered:
-  • Front Pasture (GATE-A1B2C3)  last_seq=147  paired 2026-04-12 09:14:33
-  • GATE-B7Z3K4  last_seq=22  paired 2026-05-01 17:02:11
+  • Front Pasture (GATE-A1B2C3): 🔓 OPEN
+  • Back Gate (GATE-B7Z3K4): 🔒 last seen CLOSED (no live reply)
 ```
 
 The header line carries the base's device ID and the currently-
@@ -217,11 +217,15 @@ without having to SSH in. SSID is `(unknown)` if NetworkManager
 can't report an active wireless connection (e.g. the operator
 landed on the captive portal AP somehow, or NM is wedged).
 
-The list of gates is sorted by pairing time, oldest first. `last_seq`
-is the highest sequence number the base has accepted from that gate;
-it's useful for confirming the gate is actually reaching the base. A
-constant `last_seq` over hours of expected traffic suggests the gate
-is offline or out of range.
+Per-gate state comes from a live LoRa `status_req` to each registered
+gate. A gate that responds in time shows its current state
+(`🔓 OPEN` / `🔒 CLOSED`). A gate that doesn't reply within the LoRa
+timeout falls back to the most recent state from the SQLite event
+log, marked `last seen X (no live reply)` so you can tell it might
+be stale. A freshly-paired gate that has never reported and isn't
+responding shows `❓ no data (no live reply)`.
+
+The list is sorted by pairing time, oldest first.
 
 ---
 
