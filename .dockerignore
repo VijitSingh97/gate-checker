@@ -1,0 +1,58 @@
+# Keep host-only state out of the Docker image. These paths are all
+# either bind-mounted at runtime (output_base, output_gate, dl-cache,
+# ccache-dir, releases) or never belong in an image (git history,
+# build artifacts, secrets).
+#
+# Without this file, the Dockerfile's `COPY . /workspace` shovels the
+# entire working tree into the image, which on an incremental rebuild
+# means tens of GB of Buildroot output land on the host's Docker data
+# root (`/var/lib/docker`) and immediately blow out the disk.
+
+# Buildroot output dirs — bind-mounted at runtime from the host.
+# These are the big ones; each can hit 15+ GB.
+output_base/
+output_gate/
+output/
+buildroot/output/
+buildroot/dl/
+
+# Caches — bind-mounted at runtime.
+dl-cache/
+ccache-dir/
+
+# Build outputs and release artifacts.
+releases/
+
+# Git history — not needed inside the image.
+.git/
+.gitignore
+.githooks/
+
+# Tests live in the host tree only.
+tests/
+__pycache__/
+*.pyc
+
+# Secrets — should never enter an image even by accident.
+*.env
+manufacturing_inventory.csv
+
+# Local-only maintainer files (gitignored already, but belt-and-braces).
+CLAUDE.md
+Todo.md
+
+# Editor and OS junk.
+.vscode/
+.idea/
+.cursor/
+.claude/
+.DS_Store
+*.swp
+*~
+
+# Docs and meta — fine to leave out of the image (the build doesn't
+# need them). Keep these out so a doc edit doesn't bust the image
+# cache and trigger a rebuild of the COPY layer.
+docs/
+*.md
+LICENSE
