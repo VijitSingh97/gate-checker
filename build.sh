@@ -108,6 +108,14 @@ if [ "$BUILD_GATE" -eq 1 ]; then
     ./support/kconfig/merge_config.sh -O "$OUT_GATE" "$OUT_GATE/.config" "${GATE_FRAGMENTS[@]}"
     make O="$OUT_GATE" olddefconfig
 
+    # SITE_METHOD=local packages (gate-client) don't get source-mtime
+    # tracking from Buildroot — if a Python file changes, the stamp
+    # from the previous build still says "installed" and the new code
+    # never makes it into the image. dirclean before each build is
+    # cheap (Python install is essentially `cp`, no compile step) and
+    # guarantees source edits flow through.
+    make O="$OUT_GATE" gate-client-dirclean
+
     cd "$OUT_GATE"
     make -j"$CORES"
     echo "-> Saving Gate Client image to gate_client_pi0w${SUFFIX}.img"
@@ -123,6 +131,10 @@ if [ "$BUILD_BASE" -eq 1 ]; then
     make O="$OUT_BASE" raspberrypi3_64_defconfig
     ./support/kconfig/merge_config.sh -O "$OUT_BASE" "$OUT_BASE/.config" "${BASE_FRAGMENTS[@]}"
     make O="$OUT_BASE" olddefconfig
+
+    # See the gate-client dirclean above — same rationale applies to
+    # the base-station local package.
+    make O="$OUT_BASE" base-station-dirclean
 
     cd "$OUT_BASE"
     make -j"$CORES"

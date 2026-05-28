@@ -270,7 +270,7 @@ def main() -> None:
         gate_id=gate_id,
         serial_port=os.getenv("LORA_PORT", "/dev/ttyAMA0"),
         baud_rate=int(os.getenv("LORA_BAUD", "9600")),
-        sensor_pin=int(os.getenv("SENSOR_GPIO", "21")),
+        sensor_pin=int(os.getenv("SENSOR_GPIO", "16")),
         relay_pin=int(os.getenv("RELAY_GPIO", "17")),
         lora_key=lora_key.encode("utf-8"),
     )
