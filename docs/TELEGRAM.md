@@ -21,6 +21,7 @@ back to when you have a specific command in mind.
 | `/pair GATE-XXXX <key> ["Name"]` | Register a gate. **Must be sent in a private DM with the bot.** |
 | `/unpair GATE-XXXX` | Remove a gate. Requires `/confirm`. |
 | `/rename GATE-XXXX "New Name"` | Change a gate's display name. |
+| `/relay GATE-XXXX [seconds]` | Show or set how long the gate holds its relay closed (default 1s). |
 | `/open [GATE-XXXX]` | Open a gate via the LoRa challenge/command sequence. |
 | `/close [GATE-XXXX]` | Close a gate. |
 | `/factory_reset` | Wipe Wi-Fi, Telegram, and gate state; reboot into the captive portal. Requires `/confirm`. |
@@ -206,9 +207,9 @@ No gates registered. Pair one with /pair GATE-XXXX <key> [name].
 
 2 gate(s) registered:
   • Front Pasture (GATE-A1B2C3): 🔓 OPEN
-      ⏱ open ~15s (n=14) · close ~16s (n=18)
+      ⏱ open ~15s (n=14) · close ~16s (n=18) · 🔘 press 1s
   • Back Gate (GATE-B7Z3K4): 🔒 last seen CLOSED (no live reply)
-      ⏱ open ~30s (warmup) · close ~30s (warmup)
+      ⏱ open ~30s (warmup) · close ~30s (warmup) · 🔘 press 1.5s
 ```
 
 The header line carries the base's device ID and the currently-
@@ -237,6 +238,11 @@ real-world use the threshold tightens to match the gate's actual
 cycle time. Newly-paired gates start in warmup until you've used
 `/open` or `/close` against them enough to fill the buffer.
 
+The `🔘 press` cell on the same line is the relay pulse duration
+you've set for that gate with `/relay` (1s by default) — unlike the
+adaptive grace periods, that's a value you configure rather than one
+the device learns.
+
 The list is sorted by pairing time, oldest first.
 
 ---
@@ -253,30 +259,32 @@ The list is sorted by pairing time, oldest first.
 **Reply (success):**
 ```
 🔒 Front Pasture (GATE-A1B2C3): CLOSED (live).
-⏱ open ~15s (n=14) · close ~16s (n=18)
+⏱ open ~15s (n=14) · close ~16s (n=18) · 🔘 press 1s
 ```
 
 **Reply (gate offline / out of range):**
 ```
 ❌ Front Pasture (GATE-A1B2C3) did not answer the challenge. Is the gate powered on and in LoRa range?
-⏱ open ~15s (n=14) · close ~16s (n=18)
+⏱ open ~15s (n=14) · close ~16s (n=18) · 🔘 press 1s
 ```
 
 **Reply (base-side radio failure):**
 ```
 ❌ Could not transmit to GATE-A1B2C3 — the LoRa serial write failed. Check the device log; this is a base-side problem, not the gate.
-⏱ open ~15s (n=14) · close ~16s (n=18)
+⏱ open ~15s (n=14) · close ~16s (n=18) · 🔘 press 1s
 ```
 
 This sends a real `status_req` packet over LoRa and waits up to 5
 seconds for the gate to reply. Different from `/status` (no arg),
-which only reads the local database. The second line is the
-adaptive `/open` and `/close` grace period for this gate (see the
-no-arg `/status` section above for the `(n=X)` vs `(warmup)`
-explanation). The grace-period line is stable metadata about the
-gate's actuation profile, so it appears on both success and failure
-replies — even when the gate didn't answer the live query, you can
-still see the wait you'd face on the next attempt.
+which only reads the local database. The second line carries the
+adaptive `/open` and `/close` grace periods plus the configured
+relay press time (`🔘 press`) for this gate (see the no-arg
+`/status` section above for the `(n=X)` vs `(warmup)` explanation
+and the `/relay` section for the press time). That line is stable
+metadata about the gate's actuation profile, so it appears on both
+success and failure replies — even when the gate didn't answer the
+live query, you can still see the wait you'd face on the next
+attempt.
 
 Use this when:
 - The gate hasn't sent an alert in a while and you want to confirm
@@ -427,6 +435,55 @@ your mind. Alerts from that gate will use the new name immediately.
 
 ---
 
+### `/relay` — set how long the relay is held
+
+**Syntax:** `/relay GATE-XXXX [seconds]`
+
+Most gate openers trigger on a momentary contact closure — a brief
+"button press". One second works for the majority of openers, which
+is the default. Some openers need a longer hold to register, or a
+shorter tap to avoid a double-cycle. `/relay` tunes that press time
+**per gate**, and it's kept separate from `/pair` so pairing stays
+focused on the key.
+
+Run it with no number to see the current value:
+```
+/relay GATE-A1B2C3
+```
+```
+🔘 North Driveway (GATE-A1B2C3) relay press time is 1s. Change it with /relay GATE-A1B2C3 <seconds>.
+```
+
+Run it with a number (in seconds, decimals allowed) to set it:
+```
+/relay GATE-A1B2C3 1.5
+```
+```
+🔘 North Driveway (GATE-A1B2C3) relay press time set to 1.5s. Takes effect on the next /open or /close.
+```
+
+**Reply (out of range):**
+```
+❌ Press time must be between 0.1s and 30s.
+```
+
+The value is stored on the base station and travels inside every
+`/open` and `/close` command frame, so **no gate re-flash is needed**
+— the change applies on the very next actuation. A gate you've never
+tuned uses the 1-second default, identical to older behavior.
+
+`/relay` does **not** require `/confirm` — like `/rename`, it's
+non-destructive and trivially reversible. The current value also
+shows up on the metadata line in `/status` and `/status GATE-XXXX`
+(`🔘 press 1.5s`), next to the adaptive grace periods.
+
+> Safety note: the gate clamps whatever it receives to a sane range
+> (0.1–30s) regardless, so a bad value can never latch the relay
+> closed indefinitely. The base enforces the same bounds before
+> storing.
+
+---
+
 ### `/open` — open a gate
 
 **Syntax:** `/open [GATE-XXXX]`
@@ -480,9 +537,10 @@ physically moves something).
 
 The base station sends an authenticated `challenge_req` to the gate.
 The gate replies with a single-use, 15-second-lifetime random nonce.
-The base then sends a `command(open, nonce)` packet. The gate
-verifies the nonce, pulses the relay for 1 second, and the new
-state propagates back as a normal `alert` packet.
+The base then sends a `command(open, nonce, relay_ms)` packet. The
+gate verifies the nonce, pulses the relay for the configured press
+time (1 second by default; tune it per gate with `/relay`), and the
+new state propagates back as a normal `alert` packet.
 
 If you see the success ack but the gate didn't physically move, the
 issue is between the relay and the gate itself (wiring, motor

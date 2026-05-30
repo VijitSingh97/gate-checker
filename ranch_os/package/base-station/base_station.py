@@ -9,6 +9,7 @@ portal provisioner.
 import dataclasses
 import json
 import logging
+import math
 import os
 import re
 import secrets
@@ -80,6 +81,19 @@ ACTUATION_ABSOLUTE_CEILING_SECONDS = 30.0
 # 100 keeps the table at a few KB per gate while still giving the
 # buffer plenty of headroom over BUFFER_SAMPLES.
 ACTUATION_RETENTION_PER_BUCKET = 100
+
+# Per-gate relay pulse duration: how long the gate holds its relay
+# closed to trigger the opener. Configurable from Telegram via /relay,
+# stored in `registered_gates.relay_ms`, and sent in every command
+# frame so the gate firmware needs no per-install change. The default
+# matches the gate's own fallback (1s) — a freshly-paired gate behaves
+# exactly as before until the operator tunes it. MIN/MAX bound an
+# operator typo (the gate clamps too, as defence in depth); the ceiling
+# lines up with ACTUATION_ABSOLUTE_CEILING_SECONDS so a press can never
+# outlast the grace period we'd wait for it.
+RELAY_PULSE_DEFAULT_MS = 1000
+RELAY_PULSE_MIN_MS = 100
+RELAY_PULSE_MAX_MS = 30000
 
 # Hard cap on rows kept per gate in `gate_events`. Several months of
 # forensic history for a residential gate (~10 events/day) and a
@@ -161,6 +175,13 @@ def _redact_token(text: str) -> str:
     return _BOT_TOKEN_RE.sub("<TELEGRAM_TOKEN_REDACTED>", text)
 
 
+def _format_relay_seconds(relay_ms: int) -> str:
+    """Render a relay pulse duration for the operator, e.g. 1000 -> "1s",
+    1500 -> "1.5s". The `g` format strips trailing zeros so whole-second
+    values read cleanly."""
+    return f"{relay_ms / 1000:g}s"
+
+
 def _compute_actuation_threshold_seconds(durations_ms: list[int]) -> float:
     """Adaptive grace period for /open and /close, in seconds.
 
@@ -239,17 +260,31 @@ class GateRegistry:
                     ON actuation_cycles (gate_id, action, id);
                 """
             )
-            # `name` was added after the table shipped. SQLite has no
-            # IF NOT EXISTS form for ADD COLUMN, so we attempt the ALTER
-            # and swallow the "duplicate column name" OperationalError
-            # on already-migrated databases. Idempotent across reboots.
-            try:
-                self._conn.execute(
-                    "ALTER TABLE registered_gates ADD COLUMN name TEXT"
-                )
-            except sqlite3.OperationalError as exc:
-                if "duplicate column" not in str(exc).lower():
-                    raise
+            # Columns added after the table first shipped. SQLite has no
+            # IF NOT EXISTS form for ADD COLUMN, so we attempt each ALTER
+            # and swallow the "duplicate column name" OperationalError on
+            # already-migrated databases. Idempotent across reboots.
+            #   name     — friendly label (added in Session 10)
+            #   relay_ms — per-gate relay pulse duration; NOT NULL DEFAULT
+            #              so legacy rows backfill to the 1s firmware
+            #              default automatically.
+            self._add_column_if_missing("name", "TEXT")
+            self._add_column_if_missing(
+                "relay_ms", f"INTEGER NOT NULL DEFAULT {RELAY_PULSE_DEFAULT_MS}"
+            )
+
+    def _add_column_if_missing(self, name: str, decl: str) -> None:
+        """Idempotent ALTER TABLE ADD COLUMN for registered_gates.
+
+        Must be called with `self._lock` and an open `self._conn`
+        transaction already held (i.e. from `_init_schema`)."""
+        try:
+            self._conn.execute(
+                f"ALTER TABLE registered_gates ADD COLUMN {name} {decl}"
+            )
+        except sqlite3.OperationalError as exc:
+            if "duplicate column" not in str(exc).lower():
+                raise
 
     def cipher_for(self, gate_id: str) -> Fernet | None:
         with self._lock:
@@ -302,7 +337,7 @@ class GateRegistry:
         """
         with self._lock:
             row = self._conn.execute(
-                "SELECT lora_key, last_seq, registered_at, name "
+                "SELECT lora_key, last_seq, registered_at, name, relay_ms "
                 "FROM registered_gates WHERE gate_id = ?",
                 (gate_id,),
             ).fetchone()
@@ -318,6 +353,7 @@ class GateRegistry:
             "last_seq": row[1],
             "registered_at": row[2],
             "name": row[3],
+            "relay_ms": row[4],
             "last_event_at": last_event[0] if last_event else None,
         }
 
@@ -325,7 +361,7 @@ class GateRegistry:
         """All registered gates, oldest first."""
         with self._lock:
             rows = self._conn.execute(
-                "SELECT gate_id, last_seq, registered_at, name "
+                "SELECT gate_id, last_seq, registered_at, name, relay_ms "
                 "FROM registered_gates ORDER BY registered_at ASC"
             ).fetchall()
         return [
@@ -334,6 +370,7 @@ class GateRegistry:
                 "last_seq": r[1],
                 "registered_at": r[2],
                 "name": r[3],
+                "relay_ms": r[4],
             }
             for r in rows
         ]
@@ -399,6 +436,31 @@ class GateRegistry:
             result = self._conn.execute(
                 "UPDATE registered_gates SET name = ? WHERE gate_id = ?",
                 (name, gate_id),
+            )
+            return result.rowcount > 0
+
+    def get_relay_ms(self, gate_id: str) -> int | None:
+        """Configured relay pulse duration (ms) for a gate, or None if
+        the gate isn't registered. Falls back to the default if the
+        column is somehow NULL (shouldn't happen — the column is NOT
+        NULL DEFAULT — but a hand-edited DB might surprise us)."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT relay_ms FROM registered_gates WHERE gate_id = ?",
+                (gate_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return row[0] if row[0] is not None else RELAY_PULSE_DEFAULT_MS
+
+    def set_relay_ms(self, gate_id: str, relay_ms: int) -> bool:
+        """Set a gate's relay pulse duration (ms). Returns True if the
+        gate existed. Caller is responsible for clamping to the
+        RELAY_PULSE_MIN_MS/MAX_MS range before calling."""
+        with self._lock, self._conn:
+            result = self._conn.execute(
+                "UPDATE registered_gates SET relay_ms = ? WHERE gate_id = ?",
+                (relay_ms, gate_id),
             )
             return result.rowcount > 0
 
@@ -813,6 +875,7 @@ class TelegramCommandChannel:
             "pair": self._cmd_pair,
             "unpair": self._cmd_unpair,
             "rename": self._cmd_rename,
+            "relay": self._cmd_relay,
             "open": self._cmd_open,
             "close": self._cmd_close,
             "factory_reset": self._cmd_factory_reset,
@@ -1079,6 +1142,87 @@ class TelegramCommandChannel:
             )
 
     # ------------------------------------------------------------------
+    # /relay — per-gate relay pulse duration
+    # ------------------------------------------------------------------
+
+    def _cmd_relay(self, message: dict, args: list[str]) -> None:
+        """Show or set how long the gate holds its relay closed.
+
+        `/relay GATE-XXXX`           → report the current press time
+        `/relay GATE-XXXX <seconds>` → set it (e.g. 1.5)
+
+        Kept separate from /pair so the pairing command stays focused on
+        the key + name. Not a destructive action — applies immediately
+        like /rename, no /confirm. The value is stored per-gate and
+        ships in the next /open or /close command frame.
+        """
+        chat_id = (message.get("chat") or {}).get("id")
+        min_s = _format_relay_seconds(RELAY_PULSE_MIN_MS)
+        max_s = _format_relay_seconds(RELAY_PULSE_MAX_MS)
+        default_s = _format_relay_seconds(RELAY_PULSE_DEFAULT_MS)
+        if not args or len(args) > 2:
+            self._send(
+                chat_id,
+                "❓ Usage: /relay GATE-XXXX [seconds]\n"
+                "  /relay GATE-XXXX        show the gate's relay press time\n"
+                "  /relay GATE-XXXX 1.5    set it to 1.5 seconds\n"
+                f"Range {min_s}–{max_s}; gate default {default_s}.",
+            )
+            return
+        gate_id = args[0].upper()
+        if not GATE_ID_RE.match(gate_id):
+            self._send(chat_id, f"❌ '{gate_id}' isn't a valid gate ID.")
+            return
+        existing = self.registry.get_gate(gate_id)
+        if existing is None:
+            self._send(
+                chat_id,
+                f"❌ {gate_id} is not registered. Pair it first with /pair.",
+            )
+            return
+        label = existing.get("name") or gate_id
+        if len(args) == 1:
+            current = existing.get("relay_ms") or RELAY_PULSE_DEFAULT_MS
+            self._send(
+                chat_id,
+                f"🔘 {label} ({gate_id}) relay press time is "
+                f"{_format_relay_seconds(current)}. Change it with "
+                f"/relay {gate_id} <seconds>.",
+            )
+            return
+        try:
+            seconds = float(args[1])
+            # Reject nan/inf here: they parse as floats but blow up the
+            # int(round(...)) below with ValueError/OverflowError, which
+            # would otherwise escape to the dispatch loop and leave the
+            # operator with no reply at all.
+            if not math.isfinite(seconds):
+                raise ValueError
+        except ValueError:
+            self._send(
+                chat_id,
+                f"❌ '{args[1]}' isn't a number. Give the press time in "
+                f"seconds, e.g. /relay {gate_id} 1.5.",
+            )
+            return
+        relay_ms = int(round(seconds * 1000))
+        if relay_ms < RELAY_PULSE_MIN_MS or relay_ms > RELAY_PULSE_MAX_MS:
+            self._send(
+                chat_id,
+                f"❌ Press time must be between {min_s} and {max_s}.",
+            )
+            return
+        if self.registry.set_relay_ms(gate_id, relay_ms):
+            self._send(
+                chat_id,
+                f"🔘 {label} ({gate_id}) relay press time set to "
+                f"{_format_relay_seconds(relay_ms)}. Takes effect on the "
+                "next /open or /close.",
+            )
+        else:
+            self._send(chat_id, f"❌ {gate_id} is not registered.")
+
+    # ------------------------------------------------------------------
     # /confirm + /cancel
     # ------------------------------------------------------------------
 
@@ -1223,14 +1367,17 @@ class TelegramCommandChannel:
         return "❓ no data (no live reply)"
 
     def _format_gate_timeouts(self, gate_id: str) -> str:
-        """Render the adaptive open/close grace periods for /status.
+        """Render the per-gate timing metadata for /status.
 
         Returns a single line like
-            "⏱ open ~15s (n=14) · close ~16s (n=18)"
-        with "(warmup)" in place of "(n=X)" when fewer than
-        ACTUATION_MIN_SAMPLES real samples back the threshold — so the
-        operator can tell at a glance whether the displayed value was
-        learned from this gate's history or is the default ceiling.
+            "⏱ open ~15s (n=14) · close ~16s (n=18) · 🔘 press 1.5s"
+        The grace periods are adaptive — "(warmup)" replaces "(n=X)"
+        when fewer than ACTUATION_MIN_SAMPLES real samples back the
+        threshold, so the operator can tell whether the value was
+        learned from this gate's history or is the default ceiling. The
+        trailing "🔘 press" cell is the configured relay pulse duration
+        (set via /relay), which the operator tunes rather than the
+        device learning it.
         """
         parts = []
         for action in ("open", "close"):
@@ -1243,6 +1390,8 @@ class TelegramCommandChannel:
             else:
                 tag = f"n={len(durations)}"
             parts.append(f"{action} ~{int(round(threshold))}s ({tag})")
+        relay_ms = self.registry.get_relay_ms(gate_id) or RELAY_PULSE_DEFAULT_MS
+        parts.append(f"🔘 press {_format_relay_seconds(relay_ms)}")
         return "⏱ " + " · ".join(parts)
 
     def _cmd_status_one(self, chat_id: int, gate_id: str) -> None:
@@ -1473,6 +1622,10 @@ class TelegramCommandChannel:
             "      Remove a gate. Requires /confirm.\n"
             "  /rename GATE-XXXX \"New Name\"\n"
             "      Change a gate's display name.\n"
+            "  /relay GATE-XXXX [seconds]\n"
+            "      Show or set how long the gate holds its relay closed "
+            "to trigger the opener (default 1s). Affects /open and "
+            "/close.\n"
             "  /status\n"
             "      List registered gates with their adaptive open/close "
             "grace periods.\n"
@@ -1942,9 +2095,20 @@ class BaseStation:
         timeout = _compute_actuation_threshold_seconds(durations)
         started_at = time.monotonic()
 
+        # Per-gate relay pulse duration travels in the command frame so
+        # the operator can tune it from Telegram without re-flashing the
+        # gate. The gate clamps it to its own safe bounds and falls back
+        # to its 1s firmware default if the field is missing or invalid.
+        relay_ms = self.registry.get_relay_ms(gate_id) or RELAY_PULSE_DEFAULT_MS
+
         reply = self._lora_request(
             gate_id,
-            {"type": "command", "action": action, "nonce": nonce},
+            {
+                "type": "command",
+                "action": action,
+                "nonce": nonce,
+                "relay_ms": relay_ms,
+            },
             # The gate ack's immediately for a no-op; otherwise the
             # async relay pulse triggers a normal state-change packet
             # (alert on open, status on close).

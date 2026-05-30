@@ -265,6 +265,118 @@ class RenameTests(_ChannelCase):
         self.assertIn("isn't a valid gate ID", self.cap.last_reply)
 
 
+class RelayTests(_ChannelCase):
+    """`/relay` shows or sets the per-gate relay pulse duration. Stored
+    in registered_gates.relay_ms and shipped in the next /open or
+    /close command frame; applies immediately, no /confirm (it's not
+    destructive — same posture as /rename)."""
+
+    def test_set_relay_seconds(self):
+        self.registry.register_gate("GATE-AAAAAA", self.key, "Front")
+        self.channel._process_update(
+            _helpers.make_message("/relay GATE-AAAAAA 1.5")
+        )
+        self.assertIn("set to 1.5s", self.cap.last_reply)
+        self.assertEqual(self.registry.get_relay_ms("GATE-AAAAAA"), 1500)
+
+    def test_set_whole_second_renders_without_decimal(self):
+        self.registry.register_gate("GATE-AAAAAA", self.key, None)
+        self.channel._process_update(
+            _helpers.make_message("/relay GATE-AAAAAA 2")
+        )
+        self.assertIn("set to 2s", self.cap.last_reply)
+        self.assertEqual(self.registry.get_relay_ms("GATE-AAAAAA"), 2000)
+
+    def test_query_shows_current_value(self):
+        self.registry.register_gate("GATE-AAAAAA", self.key, "Front")
+        self.registry.set_relay_ms("GATE-AAAAAA", 1800)
+        self.channel._process_update(
+            _helpers.make_message("/relay GATE-AAAAAA")
+        )
+        text = self.cap.last_reply
+        self.assertIn("relay press time is 1.8s", text)
+        # Query must not change the stored value.
+        self.assertEqual(self.registry.get_relay_ms("GATE-AAAAAA"), 1800)
+
+    def test_query_fresh_gate_shows_default(self):
+        self.registry.register_gate("GATE-AAAAAA", self.key, None)
+        self.channel._process_update(
+            _helpers.make_message("/relay GATE-AAAAAA")
+        )
+        self.assertIn("relay press time is 1s", self.cap.last_reply)
+
+    def test_unknown_gate(self):
+        self.channel._process_update(
+            _helpers.make_message("/relay GATE-NOPEXX 1.5")
+        )
+        self.assertIn("not registered", self.cap.last_reply)
+
+    def test_malformed_gate_id(self):
+        self.channel._process_update(_helpers.make_message("/relay bad 1.5"))
+        self.assertIn("isn't a valid gate ID", self.cap.last_reply)
+
+    def test_non_numeric_value_rejected(self):
+        self.registry.register_gate("GATE-AAAAAA", self.key, None)
+        self.channel._process_update(
+            _helpers.make_message("/relay GATE-AAAAAA soon")
+        )
+        self.assertIn("isn't a number", self.cap.last_reply)
+        # Value left untouched.
+        self.assertEqual(
+            self.registry.get_relay_ms("GATE-AAAAAA"),
+            self.bs.RELAY_PULSE_DEFAULT_MS,
+        )
+
+    def test_below_minimum_rejected(self):
+        self.registry.register_gate("GATE-AAAAAA", self.key, None)
+        self.channel._process_update(
+            _helpers.make_message("/relay GATE-AAAAAA 0.01")
+        )
+        self.assertIn("must be between", self.cap.last_reply)
+        self.assertEqual(
+            self.registry.get_relay_ms("GATE-AAAAAA"),
+            self.bs.RELAY_PULSE_DEFAULT_MS,
+        )
+
+    def test_above_maximum_rejected(self):
+        self.registry.register_gate("GATE-AAAAAA", self.key, None)
+        self.channel._process_update(
+            _helpers.make_message("/relay GATE-AAAAAA 60")
+        )
+        self.assertIn("must be between", self.cap.last_reply)
+        self.assertEqual(
+            self.registry.get_relay_ms("GATE-AAAAAA"),
+            self.bs.RELAY_PULSE_DEFAULT_MS,
+        )
+
+    def test_non_finite_value_rejected(self):
+        """nan/inf parse as floats but explode on int(round()). They must
+        be rejected cleanly, not escape to the dispatch loop and leave the
+        operator with no reply."""
+        self.registry.register_gate("GATE-AAAAAA", self.key, None)
+        for token in ("nan", "inf", "-inf", "infinity"):
+            with self.subTest(token=token):
+                self.channel._process_update(
+                    _helpers.make_message(f"/relay GATE-AAAAAA {token}")
+                )
+                self.assertIn("isn't a number", self.cap.last_reply)
+                self.assertEqual(
+                    self.registry.get_relay_ms("GATE-AAAAAA"),
+                    self.bs.RELAY_PULSE_DEFAULT_MS,
+                )
+
+    def test_no_args_shows_usage(self):
+        self.channel._process_update(_helpers.make_message("/relay"))
+        self.assertIn("Usage: /relay", self.cap.last_reply)
+
+    def test_too_many_args_shows_usage(self):
+        self.registry.register_gate("GATE-AAAAAA", self.key, None)
+        self.channel._process_update(
+            _helpers.make_message("/relay GATE-AAAAAA 1.5 extra")
+        )
+        self.assertIn("Usage: /relay", self.cap.last_reply)
+
+
 class ConfirmCancelTests(_ChannelCase):
     def test_confirm_with_no_pending(self):
         self.channel._process_update(_helpers.make_message("/confirm dead"))
@@ -349,7 +461,7 @@ class StatusAndHelpTests(_ChannelCase):
         self.channel._process_update(_helpers.make_message("/help"))
         text = self.cap.last_reply
         for token in (
-            "/pair", "/unpair", "/rename",
+            "/pair", "/unpair", "/rename", "/relay",
             "/status", "/open", "/close",
             "/factory_reset", "/confirm", "/cancel", "/help",
             "chat itself is the auth boundary",

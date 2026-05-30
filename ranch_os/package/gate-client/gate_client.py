@@ -35,7 +35,18 @@ SEQ_PATH = f"{STATE_DIR}/last_seq"
 
 NONCE_LIFETIME_SECONDS = 15
 CHALLENGE_MIN_INTERVAL_SECONDS = 2
+# How long the relay stays closed to trigger the gate opener. This is
+# the fallback only — the base station sends a per-gate `relay_ms` in
+# every command frame (configurable from Telegram via /relay), and we
+# use that when present. We keep the firmware default at 1s so a gate
+# paired with an older base, or a command frame that omits the field,
+# still actuates exactly as before. The MIN/MAX bounds clamp whatever
+# the base sends: a malformed or oversized value must never latch the
+# relay closed indefinitely (some openers interpret a long hold as
+# "hold the gate", others as a fault).
 RELAY_PULSE_SECONDS = 1.0
+RELAY_PULSE_MIN_SECONDS = 0.1
+RELAY_PULSE_MAX_SECONDS = 30.0
 SERIAL_READ_TIMEOUT_SECONDS = 1.0
 LOOP_TICK_SECONDS = 0.1
 
@@ -152,15 +163,35 @@ class RanchGateMonitor:
     def _current_state(self) -> str:
         return STATE_CLOSED if self.gate_sensor.is_pressed else STATE_OPEN
 
-    def _pulse_relay(self) -> None:
-        logger.info("Activating relay")
+    def _pulse_relay(self, duration_seconds: float) -> None:
+        logger.info("Activating relay for %.2fs", duration_seconds)
         self.gate_relay.on()
-        time.sleep(RELAY_PULSE_SECONDS)
+        time.sleep(duration_seconds)
         self.gate_relay.off()
         logger.info("Relay released")
 
-    def _trigger_relay_async(self) -> None:
-        threading.Thread(target=self._pulse_relay, daemon=True).start()
+    def _trigger_relay_async(self, duration_seconds: float) -> None:
+        threading.Thread(
+            target=self._pulse_relay, args=(duration_seconds,), daemon=True
+        ).start()
+
+    @staticmethod
+    def _relay_seconds_from(message: dict) -> float:
+        """Resolve the relay-pulse duration for a command frame.
+
+        The base sends `relay_ms` (an integer millisecond count) so the
+        operator can tune the press time per gate from Telegram. Fall
+        back to the firmware default when the field is absent (older
+        base) or not a sane number, and clamp to [MIN, MAX] so a
+        malformed value can't hold the relay closed indefinitely. bool
+        is rejected explicitly — it's an int subclass and a JSON `true`
+        would otherwise read as 1ms.
+        """
+        raw = message.get("relay_ms")
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            return RELAY_PULSE_SECONDS
+        seconds = raw / 1000.0
+        return max(RELAY_PULSE_MIN_SECONDS, min(RELAY_PULSE_MAX_SECONDS, seconds))
 
     def _process_incoming(self) -> None:
         if self.lora.in_waiting <= 0:
@@ -244,10 +275,11 @@ class RanchGateMonitor:
             return
 
         current = self._current_state()
+        relay_seconds = self._relay_seconds_from(message)
         if action == "open" and current == STATE_CLOSED:
-            self._trigger_relay_async()
+            self._trigger_relay_async(relay_seconds)
         elif action == "close" and current == STATE_OPEN:
-            self._trigger_relay_async()
+            self._trigger_relay_async(relay_seconds)
         else:
             self._send({"type": "ack", "result": f"already_{current}"})
 
