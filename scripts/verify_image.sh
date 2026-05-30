@@ -238,10 +238,20 @@ if [[ "$FLAVOR" == "base" ]]; then
         "TelegramCommandChannel class shipped"
     check_grep "/usr/bin/base_station.py" "class PendingAction" \
         "PendingAction dataclass shipped (confirm-flow state)"
-    for handler in _cmd_pair _cmd_unpair _cmd_rename _cmd_open _cmd_close _cmd_factory_reset _cmd_confirm _cmd_cancel _cmd_status _cmd_help; do
+    for handler in _cmd_pair _cmd_unpair _cmd_rename _cmd_relay _cmd_open _cmd_close _cmd_factory_reset _cmd_confirm _cmd_cancel _cmd_status _cmd_help; do
         check_grep "/usr/bin/base_station.py" "def ${handler}\\(" \
             "command handler ${handler} present"
     done
+    # The per-gate relay pulse duration is configurable from Telegram
+    # (/relay → set_relay_ms) and must ride in the command frame so the
+    # gate actually honors it. If the frame stops carrying relay_ms the
+    # gate silently falls back to its 1s firmware default and the
+    # operator's setting is a no-op — guard both the storage and the
+    # wire field.
+    check_grep "/usr/bin/base_station.py" "def set_relay_ms\\(" \
+        "GateRegistry.set_relay_ms (per-gate relay duration store) present"
+    check_grep "/usr/bin/base_station.py" "\"relay_ms\": relay_ms" \
+        "command frame carries the per-gate relay_ms duration"
     # /pair must redact the operator's message after parsing — without
     # this the Fernet key sits in chat history forever. Guard against
     # the regression.
@@ -534,6 +544,13 @@ else
     # use the real PL011 device directly.
     check_no_grep "/usr/bin/gate_client.py" "/dev/serial0" \
         "gate_client.py uses /dev/ttyAMA0, not the missing /dev/serial0 symlink"
+
+    # The relay pulse duration is now base-driven (the operator tunes it
+    # per gate from Telegram via /relay). The gate must read relay_ms
+    # from the command frame; if this check fails the gate ignores the
+    # field and always pulses for its hard-coded default.
+    check_grep "/usr/bin/gate_client.py" "relay_ms" \
+        "gate honors the base-sent relay_ms pulse duration"
 
     # gpiozero + a pin-factory backend must be installed; gate_client.py
     # imports Button and OutputDevice from gpiozero, and gpiozero needs

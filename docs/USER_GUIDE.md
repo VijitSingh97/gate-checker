@@ -343,6 +343,32 @@ from that history. Newly paired gates start with a 30-second
 default grace period until enough cycles fill the buffer (~5
 cycles per direction).
 
+### Setting the relay press time
+
+Most gate openers trigger on a brief "button press" — a momentary
+contact closure. One second works for most openers and is the
+default. If your opener needs a longer hold to register, or a
+shorter tap to avoid double-cycling, tune the press time per gate:
+
+```
+/relay GATE-A1B2C3 1.5
+```
+
+Run it without a number to see the current value:
+
+```
+/relay GATE-A1B2C3
+```
+
+The setting lives on the base station and rides along inside the
+next `/open` or `/close` command, so there's nothing to re-flash on
+the gate — the change applies on the very next actuation. A gate
+you've never tuned uses the 1-second default. Like `/rename`, this
+doesn't need a confirmation. The current value also shows up on the
+`🔘 press` cell in `/status`. See
+[TELEGRAM.md](TELEGRAM.md#relay--set-how-long-the-relay-is-held)
+for the bounds and full reply set.
+
 ### Renaming a gate
 
 If you initially paired a gate as "Front Pasture" and want to

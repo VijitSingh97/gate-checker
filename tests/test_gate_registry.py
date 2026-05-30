@@ -46,7 +46,15 @@ class GateRegistryTests(unittest.TestCase):
                 for row in conn.execute("PRAGMA table_info(registered_gates)")
             }
         self.assertEqual(
-            cols, {"gate_id", "lora_key", "last_seq", "registered_at", "name"}
+            cols,
+            {
+                "gate_id",
+                "lora_key",
+                "last_seq",
+                "registered_at",
+                "name",
+                "relay_ms",
+            },
         )
 
     def test_alter_table_is_idempotent(self):
@@ -88,6 +96,9 @@ class GateRegistryTests(unittest.TestCase):
         row = self.registry.get_gate("GATE-LEGACY")
         self.assertIsNotNone(row)
         self.assertIsNone(row["name"])
+        # The relay_ms column was added with NOT NULL DEFAULT, so the
+        # legacy row backfills to the firmware default rather than NULL.
+        self.assertEqual(row["relay_ms"], self.bs.RELAY_PULSE_DEFAULT_MS)
 
     # ----------------------------------------------------------------------
     # register_gate / unregister_gate / rename_gate
@@ -139,6 +150,44 @@ class GateRegistryTests(unittest.TestCase):
         self.assertEqual(self.registry.get_gate("GATE-AAAAAA")["name"], "New")
         # rename on a non-existent gate returns False.
         self.assertFalse(self.registry.rename_gate("GATE-NONE", "x"))
+
+    # ----------------------------------------------------------------------
+    # relay_ms (per-gate relay pulse duration)
+    # ----------------------------------------------------------------------
+
+    def test_new_gate_gets_default_relay_ms(self):
+        """A freshly-paired gate defaults to the firmware-equivalent
+        press time (1s) so it behaves exactly as before until tuned."""
+        self.registry.register_gate("GATE-AAAAAA", self.key, "Front")
+        self.assertEqual(
+            self.registry.get_relay_ms("GATE-AAAAAA"),
+            self.bs.RELAY_PULSE_DEFAULT_MS,
+        )
+        self.assertEqual(
+            self.registry.get_gate("GATE-AAAAAA")["relay_ms"],
+            self.bs.RELAY_PULSE_DEFAULT_MS,
+        )
+
+    def test_set_and_get_relay_ms(self):
+        self.registry.register_gate("GATE-AAAAAA", self.key, None)
+        self.assertTrue(self.registry.set_relay_ms("GATE-AAAAAA", 2500))
+        self.assertEqual(self.registry.get_relay_ms("GATE-AAAAAA"), 2500)
+
+    def test_set_relay_ms_unknown_gate_returns_false(self):
+        self.assertFalse(self.registry.set_relay_ms("GATE-NONE", 2000))
+
+    def test_get_relay_ms_unknown_gate_returns_none(self):
+        """None (not the default) signals "no such gate" so callers can
+        distinguish it from a real configured value."""
+        self.assertIsNone(self.registry.get_relay_ms("GATE-NONE"))
+
+    def test_relay_ms_survives_same_key_repair(self):
+        """Re-pairing with the same key only touches name/seq — a tuned
+        relay duration must not be silently reset to the default."""
+        self.registry.register_gate("GATE-AAAAAA", self.key, "Front")
+        self.registry.set_relay_ms("GATE-AAAAAA", 1800)
+        self.registry.register_gate("GATE-AAAAAA", self.key, "Renamed")
+        self.assertEqual(self.registry.get_relay_ms("GATE-AAAAAA"), 1800)
 
     # ----------------------------------------------------------------------
     # display_name + list_gates + get_gate(last_event_at)

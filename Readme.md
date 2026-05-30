@@ -76,9 +76,10 @@ command.
   check → Telegram message with 🔓 / 🔒 emoji prefix.
 - ✅ **Telegram command channel** on production-profile images:
   `/help`, `/status`, `/status GATE-XXXX` (live LoRa state query),
-  `/pair`, `/unpair`, `/rename`, `/factory_reset`, `/confirm`,
-  `/cancel`. State-change dedup so a `/status GATE-X` reply doesn't
-  also fire an unsolicited Telegram message.
+  `/pair`, `/unpair`, `/rename`, `/relay` (per-gate relay press time),
+  `/factory_reset`, `/confirm`, `/cancel`. State-change dedup so a
+  `/status GATE-X` reply doesn't also fire an unsolicited Telegram
+  message.
 - ✅ **Build pipeline**: reproducible Docker build, remote-SSH driven
   builds with hook support, `verify_image.sh` runs ~80 invariant
   checks against every built image — including a production-profile
@@ -90,7 +91,7 @@ command.
   cycle duration into its adaptive grace-period buffer so subsequent
   commands wait against a threshold learned from that gate's actual
   mechanical behavior.
-- ✅ **Unit suite**: 165 stdlib-`unittest` tests, ~9s end-to-end via
+- ✅ **Unit suite**: 184 stdlib-`unittest` tests, ~9s end-to-end via
   `scripts/run_tests.sh`. Pre-commit hook runs it on every commit.
 
 ## Repository layout
@@ -226,7 +227,7 @@ Full threat model with attacker scenarios is in
 ## Status
 
 Production-validated end-to-end on real hardware — alerts, every
-Telegram command (`/pair`, `/unpair`, `/rename`, `/status`,
+Telegram command (`/pair`, `/unpair`, `/rename`, `/relay`, `/status`,
 `/status GATE-X`, `/open`, `/close`, `/factory_reset`, `/confirm`,
 `/cancel`, `/help`), the captive-portal setup flow, the Wi-Fi
 watchdog, and production-profile image hygiene. Working hobby-grade

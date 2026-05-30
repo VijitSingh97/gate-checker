@@ -337,6 +337,54 @@ class LoraCommandDurationRecordingTests(_TransportCase):
         )
 
 
+class LoraCommandRelayMsTests(_TransportCase):
+    """The per-gate relay pulse duration travels in the command frame so
+    the gate honors a Telegram-configured press time. These tests
+    decrypt the outbound `command` frame and assert on its relay_ms."""
+
+    def _command_frame(self) -> dict:
+        """Decrypt the recorded writes and return the `command` frame."""
+        from cryptography.fernet import Fernet
+        cipher = Fernet(self.key.encode("utf-8"))
+        for raw in self.station.lora.writes:
+            _, _, rest = raw.partition(b":")
+            payload = rest.rstrip(b"\n")
+            frame = json.loads(cipher.decrypt(payload).decode("utf-8"))
+            if frame.get("type") == "command":
+                return frame
+        raise AssertionError("no command frame was written")
+
+    def _drive_open(self) -> dict:
+        self._inject_reply_async(
+            "GATE-RADIO1",
+            {"type": "challenge_resp", "nonce": "a" * 32},
+            after=0.02,
+        )
+        self._inject_reply_async(
+            "GATE-RADIO1",
+            {"type": "alert", "state": "open"},
+            after=0.08,
+        )
+        return self.station.lora_command("GATE-RADIO1", "open")
+
+    def test_command_frame_carries_default_relay_ms(self):
+        """A gate that's never been tuned ships the firmware-equivalent
+        default so behavior is unchanged from before the feature."""
+        result = self._drive_open()
+        self.assertEqual(result["outcome"], "ok")
+        self.assertEqual(
+            self._command_frame()["relay_ms"],
+            self.bs.RELAY_PULSE_DEFAULT_MS,
+        )
+
+    def test_command_frame_carries_configured_relay_ms(self):
+        """A /relay-tuned value is what actually goes out on the wire."""
+        self.registry.set_relay_ms("GATE-RADIO1", 2500)
+        result = self._drive_open()
+        self.assertEqual(result["outcome"], "ok")
+        self.assertEqual(self._command_frame()["relay_ms"], 2500)
+
+
 class LoraStatusRequestTests(_TransportCase):
     def test_happy_path_status(self):
         self._inject_reply_async(
