@@ -123,9 +123,10 @@ scripts/
   measure_image.sh           Rootfs size measurement
   check_factory_deps.py      Asserts factory scripts are stdlib-only
   run_tests.sh               Discovers and runs the unit test suite
+  lint.sh                    ruff + shellcheck (same entry point as CI)
 
-tests/                       Stdlib-unittest suite — 130 tests, ~8s end-to-end
-.githooks/pre-commit         Runs factory-deps + unit tests on every commit
+tests/                       Stdlib-unittest suite — 184 tests, ~9s end-to-end
+.githooks/pre-commit         Runs factory-deps + lint + unit tests on every commit
 
 flash_base_station.py        Flash + portal-credentials inject (Base Station)
 provision_gate.py            Flash + Fernet-key inject (Gate Monitor)
@@ -135,6 +136,7 @@ docs/
   USER_GUIDE.md              ⭐ Start here if you just want to use the system
   TELEGRAM.md                Every Telegram command, with example replies
   BUILDING.md                All the ways to build, flash, and test
+  RELEASING.md               Cutting and verifying a release
 ```
 
 ## Quick start

@@ -360,13 +360,11 @@ parses the command, but Telegram retains the message in its own
 backups for up to 48 hours per their published policy, and any
 client that already cached it before the deletion still has a copy.
 
-If you can't accept that exposure, pair via the captive portal
-instead — the key never transits Telegram in that path. To re-arm
-the captive portal on a deployed base station, either:
-- Run `/factory_reset` (wipes everything, including paired gates),
-  or
-- Take the base station offline for ≥30 minutes until the watchdog
-  re-enables setup mode (preserves paired gates).
+There is currently no pairing path that avoids Telegram — the
+captive portal collects Wi-Fi and Telegram credentials only, not
+gate keys — so this exposure window is inherent to pairing. If a
+key may have been compromised, re-provision the gate with a fresh
+key (`provision_gate.py`) and `/pair` it again.
 
 ---
 

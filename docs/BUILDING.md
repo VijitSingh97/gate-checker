@@ -86,8 +86,8 @@ Optional environment variables:
 | `RANCH_BUILD_PROFILE` | `production` | `production` or `development`. |
 | `RANCH_BUILD_TARGETS` | `gate base` | Space-separated subset. |
 
-Example with hooks (the recipe used in development — pauses an xmrig
-miner during the build):
+Example with hooks (pausing a background workload — here an xmrig
+miner — during the build):
 
 ```bash
 RANCH_BUILD_HOST=builder.lan \
@@ -257,7 +257,7 @@ Two layers of tests catch different kinds of regression.
 
 Stdlib `unittest` suite under `tests/` covering the base-station
 Python (command channel, LoRa transport, registry, watchdog, factory
-reset). 130 tests, ~8 seconds on a developer laptop.
+reset). 184 tests, ~9 seconds on a developer laptop.
 
 ```bash
 scripts/run_tests.sh                            # default
@@ -405,7 +405,7 @@ How:
 rm -rf output_base output_gate
 
 # Remote builder — from your laptop:
-ssh vijit@192.168.1.249 'rm -rf ranch_os_build/output_base ranch_os_build/output_gate'
+ssh <user>@<build-host> 'rm -rf ranch_os_build/output_base ranch_os_build/output_gate'
 
 # Selective — just nuke the broken one and let the other stay warm:
 rm -rf output_base    # base only
@@ -432,7 +432,7 @@ docker build --no-cache -t ranch-builder .
 
 # Remote — let remote_build.sh rebuild the container automatically
 # (it does so each run), just nuke the output dirs:
-ssh vijit@192.168.1.249 'rm -rf ranch_os_build/output_base ranch_os_build/output_gate'
+ssh <user>@<build-host> 'rm -rf ranch_os_build/output_base ranch_os_build/output_gate'
 ./remote_build.sh
 ```
 
@@ -468,7 +468,7 @@ utilities, adds your remote user to the `docker` group, and writes
 the sudoers fragment shown below with `visudo` validation:
 
 ```bash
-scripts/setup_remote_builder.sh --host 192.168.1.X --user vijit
+scripts/setup_remote_builder.sh --host <build-host> --user <user>
 ```
 
 The script is idempotent — re-run it any time you change the sudoers
@@ -485,7 +485,7 @@ sudo visudo -f /etc/sudoers.d/ranch-build
 ```
 
 ```
-vijit ALL=(root) NOPASSWD: /usr/bin/systemctl start docker containerd, \
+<user> ALL=(root) NOPASSWD: /usr/bin/systemctl start docker containerd, \
                            /usr/bin/systemctl stop docker.socket docker containerd, \
                            /usr/sbin/losetup, \
                            /usr/bin/mount, \
@@ -527,7 +527,7 @@ you — they're operator policy, not build-pipeline policy. Add them
 yourself alongside `/etc/sudoers.d/ranch-build`. For an xmrig host:
 
 ```
-vijit ALL=(root) NOPASSWD: /usr/bin/systemctl stop xmrig, \
+<user> ALL=(root) NOPASSWD: /usr/bin/systemctl stop xmrig, \
                            /usr/bin/systemctl start xmrig
 ```
 
@@ -535,7 +535,7 @@ Then your `remote_build.sh` invocation chains the hooks:
 
 ```bash
 RANCH_BUILD_HOST=builder.lan \
-RANCH_BUILD_USER=vijit \
+RANCH_BUILD_USER=<user> \
 RANCH_BUILD_PRE_HOOK='sudo systemctl stop xmrig && sudo systemctl start docker containerd' \
 RANCH_BUILD_POST_HOOK='sudo systemctl stop docker.socket docker containerd; sudo systemctl start xmrig' \
 ./remote_build.sh

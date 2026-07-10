@@ -1,8 +1,8 @@
 # Ranch OS — test suite
 
 Stdlib `unittest` suite covering the base-station application code,
-the captive-portal helpers it shares, and the Wi-Fi watchdog. 111
-tests; runs in ~7 seconds on a developer laptop.
+the captive-portal helpers it shares, and the Wi-Fi watchdog. 184
+tests; runs in ~9 seconds on a developer laptop.
 
 ## Running
 
@@ -93,7 +93,7 @@ validation, and faking that out would invalidate the test.
 | `base_station._redact_token` | token redaction inside URLs, multiple occurrences, false-positive avoidance |
 | `base_station.GateRegistry` | schema + idempotent ALTER migration, register/unregister/rename, name semantics, accept_seq replay protection, last_seq reset on key change |
 | `base_station.TelegramCommandChannel` (registry side) | every command handler, DM-only `/pair`, rate limit, pending action TTL, single-use tokens, alias commands, dispatcher edge cases |
-| `base_station.TelegramCommandChannel` (LoRa side) | outcome → message mapping for `/open`, `/close`, `/status GATE-XXXX`, including the Session-11 send_failed-vs-no_challenge distinction |
+| `base_station.TelegramCommandChannel` (LoRa side) | outcome → message mapping for `/open`, `/close`, `/status GATE-XXXX`, including the send_failed-vs-no_challenge distinction |
 | `base_station.BaseStation` LoRa transport | `lora_command` happy path, no_challenge, timeout, send_failed; `lora_status_request`; `_route_to_waiter` correctness; single-flight refusal |
 | `base_station._perform_factory_reset` | wipe ordering (unlink → nmcli delete → systemctl → os._exit), tolerance for missing files, skip of `nmcli` on unknown SSID |
 | `base_station._current_wifi_ssid` | nmcli output parsing, escaped-colon names, failure modes |
