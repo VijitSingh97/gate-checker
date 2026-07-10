@@ -116,7 +116,7 @@ PAIR_RATE_LIMIT_MAX_ATTEMPTS = 5
 # active per user. Brute force inside the 60-second window would
 # require ~65k /confirm guesses through Telegram, which the API's own
 # per-bot rate limit makes impossible. See docs/TELEGRAM.md
-# "Confirmation flow for destructive commands" for the full reasoning.
+# "/confirm — acknowledge a destructive prompt" for the full reasoning.
 PENDING_TOKEN_BYTES = 2
 # Gate IDs come from provision_gate.py: GATE- + 6-char alphabet.
 # Accept slightly broader ranges (4-12 chars) so legacy 4-char IDs from
@@ -228,6 +228,10 @@ class GateRegistry:
     def __init__(self, db_path: str) -> None:
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
+        # The DB holds every paired gate's plaintext Fernet key. sqlite3
+        # creates the file at the umask (typically 0644); tighten it so
+        # the keys don't rely solely on the parent dir's mode.
+        os.chmod(db_path, 0o600)
         self._lock = threading.Lock()
         self._init_schema()
 
@@ -264,7 +268,7 @@ class GateRegistry:
             # IF NOT EXISTS form for ADD COLUMN, so we attempt each ALTER
             # and swallow the "duplicate column name" OperationalError on
             # already-migrated databases. Idempotent across reboots.
-            #   name     — friendly label (added in Session 10)
+            #   name     — friendly label (added after first ship)
             #   relay_ms — per-gate relay pulse duration; NOT NULL DEFAULT
             #              so legacy rows backfill to the 1s firmware
             #              default automatically.
@@ -686,8 +690,8 @@ class PendingAction:
     prompt, and runs it from the `/confirm` path. The closure captures
     every argument the destructive action needs, so the confirm handler
     stays a small generic dispatcher instead of a giant switch on
-    `command`. See docs/TELEGRAM.md "Confirmation flow for destructive
-    commands".
+    `command`. See docs/TELEGRAM.md "/confirm — acknowledge a
+    destructive prompt".
     """
 
     token: str

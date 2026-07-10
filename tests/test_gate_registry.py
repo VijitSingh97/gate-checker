@@ -39,6 +39,12 @@ class GateRegistryTests(unittest.TestCase):
     # Schema + migration
     # ----------------------------------------------------------------------
 
+    def test_db_file_is_owner_only(self):
+        # The DB stores plaintext Fernet keys; sqlite3 creates it at the
+        # umask, so GateRegistry must tighten it to 0600 itself.
+        mode = os.stat(self.db_path).st_mode & 0o777
+        self.assertEqual(mode, 0o600)
+
     def test_schema_creates_both_tables_with_name_column(self):
         with sqlite3.connect(self.db_path) as conn:
             cols = {
@@ -66,7 +72,7 @@ class GateRegistryTests(unittest.TestCase):
         self.registry = self.bs.GateRegistry(self.db_path)
 
     def test_alter_table_handles_legacy_db_without_name(self):
-        """Simulate a pre-Session-10 DB by manually creating the table
+        """Simulate a legacy DB (before the `name` column shipped) by creating the table
         with no `name` column, then opening it through GateRegistry."""
         self.registry.close()
         os.unlink(self.db_path)

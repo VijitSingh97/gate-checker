@@ -12,8 +12,7 @@ What this file asserts:
   - The right outcome → operator-visible string mapping.
   - Pre-flight validation (gate-id format, registration, callback
     wired up).
-  - The send_failed vs no_challenge vs timeout distinction added in
-    the Session-11 review pass.
+  - The send_failed vs no_challenge vs timeout distinction.
 """
 
 from __future__ import annotations

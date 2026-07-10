@@ -54,7 +54,7 @@ PRINT THIS ON THE PRODUCT STICKER:
 You'll use the base station's Portal Login during initial setup, and
 each gate's Device ID + Secret Key when you pair that gate over
 Telegram. **The secret key is sensitive** — anyone who has it can
-both monitor that gate and (eventually) drive its relay. Don't post
+both monitor that gate and drive its relay. Don't post
 the keys publicly; the stickers are meant to stay on the devices.
 
 ---
@@ -252,14 +252,13 @@ sticker info. There's no soft limit on how many gates you can pair.
 The bot deletes your `/pair` line as soon as it sees it. **However,**
 Telegram itself keeps a copy of every message in its backups for up
 to 48 hours, and other Telegram clients (laptop, web) that already
-saw the message may have cached it. If you can't accept that
-exposure window:
+saw the message may have cached it.
 
-- Don't pair via Telegram. Re-arm the base station's captive portal
-  (run `/factory_reset` and start over) and pair gates through the
-  portal instead. That route never sends keys over Telegram.
-
-For most operators the 48-hour window is fine.
+There is currently no pairing path that avoids Telegram — the
+captive portal only collects Wi-Fi and Telegram credentials, not
+gate keys — so the 48-hour window is inherent to pairing. For most
+operators it's fine; if it isn't for your threat model, this system
+isn't a fit as-is.
 
 ---
 
@@ -269,15 +268,17 @@ Once everything's paired, you mostly don't have to touch the bot.
 The base station sends alerts when gates open, and you can send a
 few commands when you want to inspect or drive things.
 
-### When a gate opens
+### When a gate opens or closes
 
-You'll get a Telegram message like:
+You'll get a Telegram message on every real state change:
 
-> Gate Front Pasture (GATE-A1B2C3): OPEN
+> 🔓 Front Pasture (GATE-A1B2C3): OPEN
+>
+> 🔒 Front Pasture (GATE-A1B2C3): CLOSED
 
-That's it. Gate closes are recorded by the device but not sent as
-alerts (the design assumption is "you want to know when the gate
-opens; closing is the normal state").
+Repeat reports of the same state (e.g. a `/status` reply while the
+gate has been closed the whole time) are recorded but not sent as
+alerts, so the chat only sees actual transitions.
 
 ### Checking on your gates
 
@@ -290,15 +291,22 @@ Ask the bot to list everything it knows:
 Sample reply:
 
 ```
+📋 Base: base-a1b2c3  •  Wi-Fi: RanchHouse
+
 3 gate(s) registered:
-  • Front Pasture (GATE-A1B2C3)  last_seq=147  paired 2026-04-12 09:14:33
-  • Driveway (GATE-7F4E22)  last_seq=22  paired 2026-05-01 17:02:11
-  • Back Pasture (GATE-C8D9E0)  last_seq=88  paired 2026-05-15 12:30:01
+  • Front Pasture (GATE-A1B2C3): 🔒 CLOSED
+      ⏱ open ~15s (n=14) · close ~16s (n=18) · 🔘 press 1s
+  • Driveway (GATE-7F4E22): 🔓 OPEN
+      ⏱ open ~22s (n=7) · close ~24s (n=6) · 🔘 press 1.5s
+  • Back Pasture (GATE-C8D9E0): 🔒 last seen CLOSED (no live reply)
+      ⏱ open ~30s (warmup) · close ~30s (warmup) · 🔘 press 1s
 ```
 
-`last_seq` is the number of messages the base has received from that
-gate. If it hasn't changed in days when you'd expect activity, that
-gate may be offline.
+Each gate's state comes from a live LoRa query; if a gate doesn't
+answer, you get its last recorded state marked "(no live reply)" so
+you can't mistake stale data for fresh truth. The ⏱ line shows the
+learned actuation grace periods (or "(warmup)" until enough cycles
+have been observed) and the configured relay press time.
 
 ### Asking a specific gate "are you still there?"
 
@@ -310,13 +318,14 @@ This sends a real packet over LoRa and asks the gate for its
 current state. Reply:
 
 ```
-Front Pasture (GATE-A1B2C3): CLOSED (live).
+🔒 Front Pasture (GATE-A1B2C3): CLOSED (live).
+⏱ open ~15s (n=14) · close ~16s (n=18) · 🔘 press 1s
 ```
 
 If the gate doesn't answer:
 
 ```
-✗ Front Pasture (GATE-A1B2C3) did not answer the challenge. Is the gate powered on and in LoRa range?
+❌ Front Pasture (GATE-A1B2C3) did not answer the challenge. Is the gate powered on and in LoRa range?
 ```
 
 Useful for routine "is the gate still healthy?" checks.
@@ -491,10 +500,10 @@ how you use the system.
   and anyone you've added — sees every alert.
 - **The gate Fernet keys briefly transit Telegram during `/pair`.**
   The bot deletes the message immediately, but Telegram's own
-  backups keep it for ~48 hours. If you can't accept that exposure,
-  pair via the captive portal instead.
+  backups keep it for ~48 hours. There is no alternative pairing
+  path; the window is inherent to pairing.
 - **Anyone in your configured Telegram chat can drive every command,
-  including `/factory_reset` and (when implemented) `/open` and
+  including `/factory_reset`, `/open`, and
   `/close`.** Choose chat membership carefully. The base station
   does not distinguish between users.
 - **The base station's SD card holds every gate's Fernet key.** If
@@ -503,7 +512,7 @@ how you use the system.
   secure.
 - **A gate's SD card holds only that one gate's key.** Stolen from
   the gate, it can be used to forge alerts from that gate or
-  (eventually) drive its relay. Standard physical-security tradeoffs
+  drive its relay. Standard physical-security tradeoffs
   for an outdoor enclosure.
 
 If your threat model needs stronger guarantees, see

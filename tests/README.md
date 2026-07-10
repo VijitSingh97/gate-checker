@@ -1,8 +1,8 @@
 # Ranch OS — test suite
 
 Stdlib `unittest` suite covering the base-station application code,
-the captive-portal helpers it shares, and the Wi-Fi watchdog. 111
-tests; runs in ~7 seconds on a developer laptop.
+the gate client's pure logic, the captive-portal helpers, and the
+Wi-Fi watchdog. 200+ tests; runs in ~10 seconds on a developer laptop.
 
 ## Running
 
@@ -93,7 +93,7 @@ validation, and faking that out would invalidate the test.
 | `base_station._redact_token` | token redaction inside URLs, multiple occurrences, false-positive avoidance |
 | `base_station.GateRegistry` | schema + idempotent ALTER migration, register/unregister/rename, name semantics, accept_seq replay protection, last_seq reset on key change |
 | `base_station.TelegramCommandChannel` (registry side) | every command handler, DM-only `/pair`, rate limit, pending action TTL, single-use tokens, alias commands, dispatcher edge cases |
-| `base_station.TelegramCommandChannel` (LoRa side) | outcome → message mapping for `/open`, `/close`, `/status GATE-XXXX`, including the Session-11 send_failed-vs-no_challenge distinction |
+| `base_station.TelegramCommandChannel` (LoRa side) | outcome → message mapping for `/open`, `/close`, `/status GATE-XXXX`, including the send_failed-vs-no_challenge distinction |
 | `base_station.BaseStation` LoRa transport | `lora_command` happy path, no_challenge, timeout, send_failed; `lora_status_request`; `_route_to_waiter` correctness; single-flight refusal |
 | `base_station._perform_factory_reset` | wipe ordering (unlink → nmcli delete → systemctl → os._exit), tolerance for missing files, skip of `nmcli` on unknown SSID |
 | `base_station._current_wifi_ssid` | nmcli output parsing, escaped-colon names, failure modes |
@@ -109,8 +109,13 @@ a built `.img`):
 
 - The Buildroot config and shipped systemd unit files.
 - The captive portal's Flask app and `_complete_setup` thread —
-  needs Flask in the test env; the relevant invariants are checked
-  via `verify_image.sh:check_grep` on the deployed `provision.py`.
+  the Flask stub in `_helpers.py` only satisfies the import; the
+  relevant invariants are checked via `verify_image.sh:check_grep`
+  on the deployed `provision.py`. (The portal-password migration IS
+  covered — `test_provision_creds.py`.)
+- `gate_client.py`'s hardware paths (GPIO setup, serial loop). Its
+  pure logic — relay clamping, seq persistence, nonce handling — is
+  covered by `test_gate_client.py`.
 - The factory provisioner scripts — those are covered by
   `scripts/check_factory_deps.py` (the stdlib-only invariant) and
   by manual flash-and-verify on real SD cards.

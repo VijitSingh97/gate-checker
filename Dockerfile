@@ -1,9 +1,9 @@
-# For supply-chain hardening, pin the base image to an immutable digest
-# instead of the floating `22.04` tag. Find the current digest with:
+# Pinned to an immutable digest (supply-chain hardening) — a tag
+# re-push upstream can't silently change what builds start from.
+# Dependabot's docker ecosystem bumps this; to refresh manually:
 #     docker buildx imagetools inspect ubuntu:22.04 | grep -i 'Digest:'
-# and replace the line below with, e.g.:
-#     FROM ubuntu@sha256:<the-64-char-digest>
-FROM ubuntu:22.04
+# ubuntu:22.04 as of 2026-07-09
+FROM ubuntu@sha256:0e0a0fc6d18feda9db1590da249ac93e8d5abfea8f4c3c0c849ce512b5ef8982
 
 ENV DEBIAN_FRONTEND=noninteractive
 

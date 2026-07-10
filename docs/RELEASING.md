@@ -55,8 +55,8 @@ that out in the release notes.
 ```bash
 RANCH_BUILD_TARGETS="base gate" \
 RANCH_BUILD_PROFILE=production \
-RANCH_BUILD_HOST=192.168.1.249 \
-RANCH_BUILD_USER=vijit \
+RANCH_BUILD_HOST=<build-host> \
+RANCH_BUILD_USER=<user> \
 ./remote_build.sh
 ```
 
@@ -210,7 +210,7 @@ for the captive-portal walkthrough.
 ## What's fixed
 
 - `/status GATE-X` no longer double-pages when the gate is in the
-  same state as last recorded (Session 16 dedup regression).
+  same state as last recorded (status-reply dedup regression).
 
 ## Verified on
 
