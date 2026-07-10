@@ -91,7 +91,7 @@ command.
   cycle duration into its adaptive grace-period buffer so subsequent
   commands wait against a threshold learned from that gate's actual
   mechanical behavior.
-- ✅ **Unit suite**: 184 stdlib-`unittest` tests, ~9s end-to-end via
+- ✅ **Unit suite**: 200+ stdlib-`unittest` tests, ~10s end-to-end via
   `scripts/run_tests.sh`. Pre-commit hook runs it on every commit.
 
 ## Repository layout
@@ -125,7 +125,7 @@ scripts/
   run_tests.sh               Discovers and runs the unit test suite
   lint.sh                    ruff + shellcheck (same entry point as CI)
 
-tests/                       Stdlib-unittest suite — 184 tests, ~9s end-to-end
+tests/                       Stdlib-unittest suite — 200+ tests, ~10s end-to-end
 .githooks/pre-commit         Runs factory-deps + lint + unit tests on every commit
 
 flash_base_station.py        Flash + portal-credentials inject (Base Station)

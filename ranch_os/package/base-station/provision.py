@@ -50,7 +50,13 @@ CONFIG_PATH = f"{STATE_DIR}/base_config.env"
 # reads this on startup, renders it as a banner above the form, and
 # deletes it after the next successful save. Plain-text, single line.
 SETUP_ERROR_PATH = f"{STATE_DIR}/setup_error.txt"
-PROVISION_CREDS_PATH = "/boot/provision_creds.env"
+# The factory flash writes provision_creds.env to FAT32 /boot (easy to
+# inject from a host laptop). FAT32 mode bits are advisory, so on first
+# run we migrate it to ext4 (0600) — same rationale and crash-safe
+# ordering as the gate's ranch-gate-config-migrate.sh. The /boot path
+# is only ever read if migration hasn't happened yet.
+PROVISION_CREDS_BOOT_PATH = "/boot/provision_creds.env"
+PROVISION_CREDS_PATH = f"{STATE_DIR}/provision_creds.env"
 WIFI_CONNECT_HELPER = "/usr/bin/ranch-wifi-connect"
 
 UNPRIVILEGED_USER = "basesetup"
@@ -234,6 +240,41 @@ HTML_TEMPLATE = """
 """
 
 
+def _migrate_provision_creds() -> None:
+    """Move provision_creds.env off FAT32 /boot onto ext4 STATE_DIR.
+
+    Anyone who pulls the SD card can read the FAT32 copy regardless of
+    its mode bits, so the portal password must not live there past the
+    first boot. Crash-safe, mirroring ranch-gate-config-migrate.sh:
+    copy → fsync → atomic replace → only then remove the /boot copy.
+    An interruption at any point leaves at least one intact copy and
+    the next run finishes the job. Must run as root (before
+    _drop_privileges).
+    """
+    if not os.path.exists(PROVISION_CREDS_BOOT_PATH):
+        return
+    try:
+        if not os.path.exists(PROVISION_CREDS_PATH):
+            os.makedirs(STATE_DIR, exist_ok=True)
+            tmp = f"{PROVISION_CREDS_PATH}.tmp"
+            with open(PROVISION_CREDS_BOOT_PATH, "rb") as src, \
+                    open(tmp, "wb") as dst:
+                dst.write(src.read())
+                dst.flush()
+                os.fsync(dst.fileno())
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, PROVISION_CREDS_PATH)
+        os.unlink(PROVISION_CREDS_BOOT_PATH)
+        logger.info(
+            "Migrated %s -> %s (portal password now ext4-protected)",
+            PROVISION_CREDS_BOOT_PATH, PROVISION_CREDS_PATH,
+        )
+    except OSError as exc:
+        # Never block setup on the migration — _load_provision_credentials
+        # falls back to whichever copy is still readable.
+        logger.error("provision_creds migration failed: %s", exc)
+
+
 def _load_provision_credentials() -> str:
     """Read the per-device portal auth password.
 
@@ -243,17 +284,26 @@ def _load_provision_credentials() -> str:
     older flash scripts — we intentionally run the setup AP open, see
     _start_access_point for why).
     """
+    _migrate_provision_creds()
     creds: dict[str, str] = {}
-    try:
-        with open(PROVISION_CREDS_PATH, encoding="utf-8") as handle:
-            for line in handle:
-                line = line.strip()
-                if not line or "=" not in line or line.startswith("#"):
-                    continue
-                key, value = line.split("=", 1)
-                creds[key.strip()] = value.strip()
-    except FileNotFoundError:
-        logger.critical("Provisioning credentials not found at %s", PROVISION_CREDS_PATH)
+    for path in (PROVISION_CREDS_PATH, PROVISION_CREDS_BOOT_PATH):
+        try:
+            with open(path, encoding="utf-8") as handle:
+                for line in handle:
+                    line = line.strip()
+                    if not line or "=" not in line or line.startswith("#"):
+                        continue
+                    key, value = line.split("=", 1)
+                    creds[key.strip()] = value.strip()
+            break
+        except OSError:
+            # Missing or unreadable — try the other copy.
+            continue
+    else:
+        logger.critical(
+            "Provisioning credentials not found at %s or %s",
+            PROVISION_CREDS_PATH, PROVISION_CREDS_BOOT_PATH,
+        )
         raise SystemExit(1)
 
     portal_password = creds.get("PORTAL_PASSWORD")

@@ -614,7 +614,8 @@ isn't wiped).
 
 #### What survives
 
-- The portal password (from `/boot/provision_creds.env`) — needed
+- The portal password (migrated on first boot from
+  `/boot/provision_creds.env` to `/var/lib/base_station/`) — needed
   to log back into the captive portal after the reset.
 - The device's hostname and Buildroot OS — this is a *config* reset,
   not an OS re-flash. To wipe even the portal password, re-flash

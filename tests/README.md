@@ -1,8 +1,8 @@
 # Ranch OS — test suite
 
 Stdlib `unittest` suite covering the base-station application code,
-the captive-portal helpers it shares, and the Wi-Fi watchdog. 184
-tests; runs in ~9 seconds on a developer laptop.
+the gate client's pure logic, the captive-portal helpers, and the
+Wi-Fi watchdog. 200+ tests; runs in ~10 seconds on a developer laptop.
 
 ## Running
 
@@ -109,8 +109,13 @@ a built `.img`):
 
 - The Buildroot config and shipped systemd unit files.
 - The captive portal's Flask app and `_complete_setup` thread —
-  needs Flask in the test env; the relevant invariants are checked
-  via `verify_image.sh:check_grep` on the deployed `provision.py`.
+  the Flask stub in `_helpers.py` only satisfies the import; the
+  relevant invariants are checked via `verify_image.sh:check_grep`
+  on the deployed `provision.py`. (The portal-password migration IS
+  covered — `test_provision_creds.py`.)
+- `gate_client.py`'s hardware paths (GPIO setup, serial loop). Its
+  pure logic — relay clamping, seq persistence, nonce handling — is
+  covered by `test_gate_client.py`.
 - The factory provisioner scripts — those are covered by
   `scripts/check_factory_deps.py` (the stdlib-only invariant) and
   by manual flash-and-verify on real SD cards.

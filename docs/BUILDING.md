@@ -178,9 +178,11 @@ Both factory scripts:
    - Base station: 16-char portal password (95 bits of entropy).
    - Gate: 32-byte URL-safe-base64 Fernet key (256 bits).
 3. Write those credentials to the FAT32 boot partition. For the
-   base, that's `/boot/provision_creds.env` (read by the captive
-   portal). For the gate, that's `/boot/gate_config.env`, which a
-   first-boot oneshot service moves to ext4 + mode 0600.
+   base, that's `/boot/provision_creds.env`; for the gate,
+   `/boot/gate_config.env`. Both are moved to ext4 + mode 0600 on
+   first boot (the gate via a oneshot service, the base by the
+   captive portal itself), since FAT32 mode bits are advisory and
+   anyone holding the SD card could read them.
 4. Append a row to `manufacturing_inventory.csv` (mode 0600,
    gitignored).
 5. Print a "PRINT THIS ON THE PRODUCT STICKER" block to stdout. The
@@ -257,7 +259,7 @@ Two layers of tests catch different kinds of regression.
 
 Stdlib `unittest` suite under `tests/` covering the base-station
 Python (command channel, LoRa transport, registry, watchdog, factory
-reset). 184 tests, ~9 seconds on a developer laptop.
+reset). 200+ tests, ~10 seconds on a developer laptop.
 
 ```bash
 scripts/run_tests.sh                            # default

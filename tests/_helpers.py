@@ -94,6 +94,55 @@ def _install_stubs() -> None:
         fake_serial.Serial = Serial
         sys.modules["serial"] = fake_serial
 
+    if "gpiozero" not in sys.modules:
+        # gate_client.py imports Button and OutputDevice at module load.
+        # Tests never touch real GPIO; anything hardware-driven is
+        # replaced per-test with richer fakes.
+        fake_gpiozero = types.ModuleType("gpiozero")
+
+        class Button:
+            def __init__(self, *args, **kwargs) -> None:
+                self.is_pressed = True
+                self.when_released = None
+                self.when_pressed = None
+
+        class OutputDevice:
+            def __init__(self, *args, **kwargs) -> None:
+                self.value = 0
+
+            def on(self) -> None:
+                self.value = 1
+
+            def off(self) -> None:
+                self.value = 0
+
+        fake_gpiozero.Button = Button
+        fake_gpiozero.OutputDevice = OutputDevice
+        sys.modules["gpiozero"] = fake_gpiozero
+
+    if "flask" not in sys.modules:
+        # provision.py imports flask at module load; the migration tests
+        # only exercise filesystem logic, so the stub just has to satisfy
+        # the import.
+        fake_flask = types.ModuleType("flask")
+
+        class Flask:
+            def __init__(self, *args, **kwargs) -> None:
+                pass
+
+            def route(self, *args, **kwargs):
+                return lambda f: f
+
+        class Response:
+            def __init__(self, *args, **kwargs) -> None:
+                pass
+
+        fake_flask.Flask = Flask
+        fake_flask.Response = Response
+        fake_flask.render_template_string = lambda *a, **k: ""
+        fake_flask.request = types.SimpleNamespace()
+        sys.modules["flask"] = fake_flask
+
 
 _install_stubs()
 
@@ -138,6 +187,22 @@ def import_factory_sticker():
     """Load `factory_sticker.py` from the repo root."""
     return _load_from_path(
         "factory_sticker", os.path.join(REPO_ROOT, "factory_sticker.py")
+    )
+
+
+def import_gate_client():
+    """Load `gate_client.py` (needs the serial + gpiozero stubs)."""
+    return _load_from_path(
+        "gate_client",
+        os.path.join(REPO_ROOT, "ranch_os", "package", "gate-client",
+                     "gate_client.py"),
+    )
+
+
+def import_provision():
+    """Load the base station's `provision.py` (needs the flask stub)."""
+    return _load_from_path(
+        "provision", os.path.join(_BASE_STATION_DIR, "provision.py")
     )
 
 
