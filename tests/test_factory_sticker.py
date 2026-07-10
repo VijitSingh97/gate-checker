@@ -69,7 +69,7 @@ class PrintStickerTests(unittest.TestCase):
     def test_single_pair_renders_cleanly(self):
         """One-field sticker still gets divider/title/divider scaffolding."""
         out = self._render(("Key", "Value"))
-        lines = [l for l in out.splitlines() if l.strip()]
+        lines = [ln for ln in out.splitlines() if ln.strip()]
         # Expect 3 non-empty lines: top divider, title, one value, bottom divider.
         self.assertGreaterEqual(len(lines), 4)
         self.assertTrue(lines[0].startswith("-"))

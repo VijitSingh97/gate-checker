@@ -20,6 +20,20 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # ubuntu-latest ships shellcheck; ruff comes from pip. Both are
+      # then driven by scripts/lint.sh, the same entry point the
+      # pre-commit hook uses, so local and CI lint can't drift.
+      - name: Install ruff
+        run: python3 -m pip install ruff
+
+      - name: Lint (ruff + shellcheck)
+        run: scripts/lint.sh
+
   unit:
     runs-on: ubuntu-latest
     steps:

@@ -28,6 +28,13 @@ if ! python3 "$REPO_ROOT/scripts/check_factory_deps.py"; then
     exit 1
 fi
 
+if ! "$REPO_ROOT/scripts/lint.sh"; then
+    echo
+    echo "pre-commit failed: lint errors (ruff / shellcheck)."
+    echo "Re-run locally with:  scripts/lint.sh"
+    exit 1
+fi
+
 if ! "$REPO_ROOT/scripts/run_tests.sh"; then
     echo
     echo "pre-commit failed: unit tests failed."

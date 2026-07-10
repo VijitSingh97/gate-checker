@@ -1,0 +1,20 @@
+# Keeps the supply chain patched. No `pip` ecosystem entry: the repo
+# deliberately ships no requirements.txt/pyproject.toml — on-device
+# Python deps come from Buildroot, and the only dev dependency
+# (cryptography, for tests) is installed ad hoc in CI.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: gitsubmodule # buildroot pin
+    directory: /
+    schedule:
+      interval: monthly
