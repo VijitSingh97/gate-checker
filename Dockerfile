@@ -3,7 +3,7 @@
 # Dependabot's docker ecosystem bumps this; to refresh manually:
 #     docker buildx imagetools inspect ubuntu:22.04 | grep -i 'Digest:'
 # ubuntu:22.04 as of 2026-07-09
-FROM ubuntu@sha256:0e0a0fc6d18feda9db1590da249ac93e8d5abfea8f4c3c0c849ce512b5ef8982
+FROM ubuntu@sha256:678c6550cc43645e08669028bc177f50be4e7c5b8cca677067b1914d4afc7a03
 
 ENV DEBIAN_FRONTEND=noninteractive
 
